@@ -1,0 +1,10 @@
+packages:
+  # Single unified app. apps/admin, apps/api and the seven unused packages
+  # were removed — only the web app and the shared types remain.
+  - 'apps/web'
+  - 'packages/*'
+
+# Forces the patched postcss through Next's transitive dependency
+# (GHSA-qx2v-qp2m-jg93: XSS via unescaped </style> in CSS stringify output).
+overrides:
+  postcss: '^8.5.10'

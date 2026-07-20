@@ -1,0 +1,240 @@
+// Central SEO helpers: canonical URLs, page metadata and schema.org JSON-LD.
+// Keeping these in one place stops titles/descriptions drifting apart across
+// pages, which is what search engines penalise.
+import type { Metadata } from 'next';
+import { BRAND } from '@/lib/brand';
+
+export const SITE_URL = (
+  process.env.NEXT_PUBLIC_APP_URL ?? 'https://themindsetmeditation.app'
+).replace(/\/$/, '');
+
+export function canonical(path = '/'): string {
+  return `${SITE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+/** Titles read best at 50–60 chars; descriptions at 140–160. */
+export function clampDescription(text: string, max = 158): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  return `${cut.slice(0, cut.lastIndexOf(' '))}…`;
+}
+
+export function pageMetadata({
+  title,
+  description,
+  path,
+  image,
+  type = 'website',
+  publishedTime,
+  keywords,
+  absoluteTitle,
+  noIndex,
+}: {
+  title: string;
+  description: string;
+  path: string;
+  image?: string | null;
+  type?: 'website' | 'article';
+  publishedTime?: string;
+  keywords?: string[];
+  /** Skip the "| Brand" template — needed on `/`, which shares the root
+   *  segment with the layout and so never receives the template anyway. */
+  absoluteTitle?: boolean;
+  noIndex?: boolean;
+}): Metadata {
+  const url = canonical(path);
+  const desc = clampDescription(description);
+  const images = image ? [{ url: image, width: 1200, height: 630, alt: title }] : undefined;
+
+  return {
+    title: absoluteTitle ? { absolute: title } : title,
+    ...(noIndex ? { robots: { index: false, follow: true } } : {}),
+    description: desc,
+    keywords,
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description: desc,
+      url,
+      siteName: BRAND.name,
+      type,
+      locale: 'en_US',
+      ...(images ? { images } : {}),
+      ...(publishedTime ? { publishedTime } : {}),
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description: desc,
+      ...(image ? { images: [image] } : {}),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// JSON-LD builders
+// ---------------------------------------------------------------------------
+
+export function organizationLd() {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    '@id': `${SITE_URL}/#organization`,
+    name: BRAND.name,
+    alternateName: BRAND.shortName,
+    url: SITE_URL,
+    logo: `${SITE_URL}/icon.svg`,
+    description: BRAND.description,
+    slogan: BRAND.tagline,
+  };
+}
+
+export function webSiteLd() {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    '@id': `${SITE_URL}/#website`,
+    url: SITE_URL,
+    name: BRAND.name,
+    description: BRAND.description,
+    publisher: { '@id': `${SITE_URL}/#organization` },
+    inLanguage: 'en-US',
+  };
+}
+
+export function breadcrumbLd(trail: Array<{ name: string; path: string }>) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: trail.map((crumb, i) => ({
+      '@type': 'ListItem',
+      position: i + 1,
+      name: crumb.name,
+      item: canonical(crumb.path),
+    })),
+  };
+}
+
+export function episodeLd(episode: {
+  title: string;
+  slug: string;
+  description?: string | null;
+  durationSeconds: number;
+  thumbnailUrl?: string | null;
+  createdAt?: string | null;
+  hostName?: string | null;
+  categoryName?: string | null;
+}) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'PodcastEpisode',
+    url: canonical(`/podcast/${episode.slug}`),
+    name: episode.title,
+    description: clampDescription(episode.description ?? BRAND.description),
+    timeRequired: isoDuration(episode.durationSeconds),
+    duration: isoDuration(episode.durationSeconds),
+    ...(episode.thumbnailUrl ? { image: episode.thumbnailUrl } : {}),
+    ...(episode.createdAt ? { datePublished: episode.createdAt } : {}),
+    ...(episode.categoryName ? { genre: episode.categoryName } : {}),
+    partOfSeries: {
+      '@type': 'PodcastSeries',
+      name: BRAND.name,
+      url: SITE_URL,
+    },
+    associatedMedia: {
+      '@type': 'AudioObject',
+      contentUrl: canonical(`/podcast/${episode.slug}`),
+      duration: isoDuration(episode.durationSeconds),
+      encodingFormat: 'audio/mpeg',
+    },
+    ...(episode.hostName
+      ? { author: { '@type': 'Person', name: episode.hostName } }
+      : { author: { '@id': `${SITE_URL}/#organization` } }),
+    publisher: { '@id': `${SITE_URL}/#organization` },
+  };
+}
+
+export function playlistLd(playlist: {
+  title: string;
+  slug: string;
+  description?: string | null;
+  episodes: Array<{ title: string; slug: string }>;
+}) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'PodcastSeries',
+    url: canonical(`/playlist/${playlist.slug}`),
+    name: playlist.title,
+    description: clampDescription(playlist.description ?? BRAND.description),
+    publisher: { '@id': `${SITE_URL}/#organization` },
+    numberOfEpisodes: playlist.episodes.length,
+    hasPart: playlist.episodes.map((e) => ({
+      '@type': 'PodcastEpisode',
+      name: e.title,
+      url: canonical(`/podcast/${e.slug}`),
+    })),
+  };
+}
+
+export function faqLd(items: Array<{ question: string; answer: string }>) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: items.map((item) => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: { '@type': 'Answer', text: item.answer },
+    })),
+  };
+}
+
+export function itemListLd(items: Array<{ name: string; path: string }>, name: string) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name,
+    numberOfItems: items.length,
+    itemListElement: items.map((item, i) => ({
+      '@type': 'ListItem',
+      position: i + 1,
+      name: item.name,
+      url: canonical(item.path),
+    })),
+  };
+}
+
+/** Seconds → ISO-8601 duration, e.g. 930 → "PT15M30S". */
+export function isoDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `PT${h ? `${h}H` : ''}${m ? `${m}M` : ''}${sec || (!h && !m) ? `${sec}S` : ''}`;
+}
+
+/**
+ * SECURITY: JSON.stringify does not escape `<`, so a title containing
+ * `</script>` would close this tag early and execute whatever follows — a
+ * stored XSS reachable through any episode or playlist name. Escaping the
+ * angle brackets and ampersand as \uXXXX keeps the JSON valid (parsers decode
+ * the escapes) while making a break-out impossible.
+ */
+function safeJsonLd(data: object | object[]): string {
+  return JSON.stringify(data)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
+/** Renders a JSON-LD <script>. Next dedupes these fine in the app router. */
+export function JsonLd({ data }: { data: object | object[] }) {
+  return (
+    <script
+      type="application/ld+json"
+      suppressHydrationWarning
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD must be inlined
+      dangerouslySetInnerHTML={{ __html: safeJsonLd(data) }}
+    />
+  );
+}

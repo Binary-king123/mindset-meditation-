@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Typecheck, lint & build
+    runs-on: ubuntu-latest
+    env:
+      # Build-time only. NEXT_PUBLIC_* values get inlined into the client
+      # bundle, so the build needs them present to compile. The fallbacks are
+      # placeholders — CI never reaches a real project. Add repository secrets
+      # if you want CI to build against yours.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key' }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-service-key' }}
+      NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL || 'http://localhost:3100' }}
+      ADMIN_VERIFICATION_CODE: ci-placeholder-code
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm --filter @mindset/web typecheck
+
+      - name: Lint
+        run: pnpm --filter @mindset/web lint
+
+      - name: Build
+        run: pnpm --filter @mindset/web build
