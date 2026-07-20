@@ -37,7 +37,7 @@ export default function RegisterPage() {
     }
 
     // Confirmation disabled — the signup already established a session.
-    toast.success('Welcome to ' + BRAND.name + '!');
+    toast.success(`Welcome to ${BRAND.name}!`);
     window.location.assign('/');
   }
 

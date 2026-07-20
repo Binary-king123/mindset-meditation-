@@ -18,14 +18,21 @@
       },
       "correctness": {
         "noUnusedImports": "warn",
-        "noUnusedVariables": "warn"
+        "noUnusedVariables": "warn",
+        "useExhaustiveDependencies": "warn"
       },
       "security": {
         "noDangerouslySetInnerHtmlWithChildren": "error"
       },
+      "suspicious": {
+        "noExplicitAny": "warn"
+      },
       "style": {
         "noNonNullAssertion": "off",
         "useConst": "error"
+      },
+      "a11y": {
+        "noLabelWithoutControl": "warn"
       }
     }
   },

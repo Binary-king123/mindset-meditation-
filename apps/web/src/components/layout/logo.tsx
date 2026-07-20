@@ -20,7 +20,8 @@ export function LogoMark({ className }: { className?: string }) {
       }}
       aria-hidden
     >
-      <svg viewBox="0 0 32 32" className="w-full h-full text-white/90" fill="none">
+      <svg viewBox="0 0 32 32" className="w-full h-full text-white/90" fill="none" role="img">
+        <title>The Mindset Meditation</title>
         <circle cx="16" cy="16" r="10.5" stroke="currentColor" strokeWidth="1.1" opacity="0.5" />
         <circle cx="16" cy="16" r="6.5" stroke="currentColor" strokeWidth="1.3" opacity="0.8" />
         <circle cx="16" cy="16" r="2.6" fill="currentColor" />

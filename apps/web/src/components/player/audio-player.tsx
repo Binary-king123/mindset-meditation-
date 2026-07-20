@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import {
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX,
-  Repeat, Shuffle, List, Timer, ChevronDown, ChevronUp, Gauge
+  Repeat, Shuffle, List, Timer, ChevronDown, Gauge
 } from 'lucide-react';
 import { usePlayerStore } from '@/store/player.store';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
 
 function formatTime(seconds: number): string {
-  if (isNaN(seconds)) return '0:00';
+  if (Number.isNaN(seconds)) return '0:00';
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
@@ -94,6 +94,7 @@ export function AudioPlayer() {
           <div className="p-3 flex items-center gap-3">
             {/* Thumbnail */}
             <motion.button
+              type="button"
               whileTap={{ scale: 0.95 }}
               onClick={() => setExpanded(true)}
               className="relative w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 glow-primary"
@@ -113,14 +114,24 @@ export function AudioPlayer() {
             </motion.button>
 
             {/* Info */}
-            <div className="flex-1 min-w-0" onClick={() => setExpanded(true)}>
-              <p className="text-white font-bold text-sm truncate">{track.title}</p>
-              <p className="text-white/50 text-xs truncate">{track.instructor_name ?? BRAND.shortName}</p>
-            </div>
+            {/* A real <button>: keyboard and screen-reader support for free,
+                rather than re-implementing them on a div with role="button". */}
+            <button
+              type="button"
+              className="flex-1 min-w-0 text-left cursor-pointer"
+              onClick={() => setExpanded(true)}
+              aria-label={`Expand player: ${track.title}`}
+            >
+              <span className="block text-white font-bold text-sm truncate">{track.title}</span>
+              <span className="block text-white/50 text-xs truncate">
+                {track.instructor_name ?? BRAND.shortName}
+              </span>
+            </button>
 
             {/* Controls */}
             <div className="flex items-center gap-1 flex-shrink-0">
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipPrev}
                 className="p-2 text-white/70 hover:text-white transition-colors"
@@ -130,6 +141,7 @@ export function AudioPlayer() {
               </motion.button>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={store.isPlaying ? pause : resume}
                 className="w-10 h-10 bg-primary rounded-full flex items-center justify-center glow-primary"
@@ -145,6 +157,7 @@ export function AudioPlayer() {
               </motion.button>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipNext}
                 className="p-2 text-white/70 hover:text-white transition-colors"
@@ -170,6 +183,7 @@ export function AudioPlayer() {
             {/* Header */}
             <div className="flex items-center justify-between mb-8">
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={() => setExpanded(false)}
                 className="p-2 text-white/60 hover:text-white transition-colors"
@@ -180,6 +194,7 @@ export function AudioPlayer() {
                 <p className="text-white/50 text-xs font-semibold uppercase tracking-widest">Now Playing</p>
               </div>
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={() => setShowQueue(!showQueue)}
                 className={cn('p-2 transition-colors', showQueue ? 'text-primary' : 'text-white/60 hover:text-white')}
@@ -202,7 +217,7 @@ export function AudioPlayer() {
               ) : (
                 <div
                   className="w-full h-full flex items-center justify-center text-9xl"
-                  style={{ background: `linear-gradient(135deg, hsl(247,83%,30%) 0%, hsl(270,60%,20%) 100%)` }}
+                  style={{ background: 'linear-gradient(135deg, hsl(247,83%,30%) 0%, hsl(270,60%,20%) 100%)' }}
                 >
                   🧘
                 </div>
@@ -228,6 +243,12 @@ export function AudioPlayer() {
               <div
                 className="h-2 bg-white/10 rounded-full cursor-pointer group relative"
                 onClick={handleSeek}
+                onKeyDown={(e) => {
+                  // Arrow keys nudge by 5s so the bar is usable without a mouse.
+                  if (e.key === 'ArrowRight') seek(Math.min(store.currentTime + 5, store.duration));
+                  if (e.key === 'ArrowLeft') seek(Math.max(store.currentTime - 5, 0));
+                }}
+                tabIndex={0}
                 role="slider"
                 aria-label="Seek"
                 aria-valuenow={store.currentTime}
@@ -250,6 +271,7 @@ export function AudioPlayer() {
             {/* Main Controls */}
             <div className="flex items-center justify-center gap-6 mb-8">
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleShuffle}
                 className={cn('p-2 transition-colors', store.isShuffle ? 'text-primary' : 'text-white/50 hover:text-white')}
@@ -259,6 +281,7 @@ export function AudioPlayer() {
               </motion.button>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipPrev}
                 className="p-3 text-white/70 hover:text-white transition-colors"
@@ -267,6 +290,7 @@ export function AudioPlayer() {
               </motion.button>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.95 }}
                 onClick={store.isPlaying ? pause : resume}
                 className="w-20 h-20 bg-primary rounded-full flex items-center justify-center glow-primary-lg"
@@ -281,6 +305,7 @@ export function AudioPlayer() {
               </motion.button>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipNext}
                 className="p-3 text-white/70 hover:text-white transition-colors"
@@ -289,6 +314,7 @@ export function AudioPlayer() {
               </motion.button>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleRepeat}
                 className={cn('p-2 transition-colors', store.isRepeat ? 'text-primary' : 'text-white/50 hover:text-white')}
@@ -302,7 +328,7 @@ export function AudioPlayer() {
             <div className="flex items-center justify-between mb-4">
               {/* Volume */}
               <div className="flex items-center gap-2 flex-1">
-                <button onClick={toggleMute} className="text-white/50 hover:text-white transition-colors">
+                <button type="button" onClick={toggleMute} className="text-white/50 hover:text-white transition-colors">
                   {store.isMuted || store.volume === 0 ? (
                     <VolumeX className="w-4 h-4" />
                   ) : (
@@ -325,6 +351,7 @@ export function AudioPlayer() {
                 {/* Playback Speed */}
                 <div className="relative">
                   <button
+                    type="button"
                     onClick={() => { setShowSpeedMenu(!showSpeedMenu); setShowSleepMenu(false); }}
                     className={cn('flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg transition-colors', showSpeedMenu ? 'text-primary bg-primary/10' : 'text-white/50 hover:text-white')}
                   >
@@ -341,6 +368,7 @@ export function AudioPlayer() {
                       >
                         {PLAYBACK_SPEEDS.map((speed) => (
                           <button
+                            type="button"
                             key={speed}
                             onClick={() => { setPlaybackSpeed(speed); setShowSpeedMenu(false); }}
                             className={cn(
@@ -359,6 +387,7 @@ export function AudioPlayer() {
                 {/* Sleep Timer */}
                 <div className="relative">
                   <button
+                    type="button"
                     onClick={() => { setShowSleepMenu(!showSleepMenu); setShowSpeedMenu(false); }}
                     className={cn('flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg transition-colors', (showSleepMenu || store.sleepTimerEndsAt) ? 'text-primary bg-primary/10' : 'text-white/50 hover:text-white')}
                   >
@@ -376,6 +405,7 @@ export function AudioPlayer() {
                         className="absolute bottom-full right-0 mb-2 bg-card border border-border rounded-xl p-2 shadow-2xl min-w-[120px]"
                       >
                         <button
+                          type="button"
                           onClick={() => { setSleepTimer(null); setShowSleepMenu(false); }}
                           className="block w-full text-left px-3 py-1.5 text-sm rounded-lg text-foreground hover:bg-accent"
                         >
@@ -383,6 +413,7 @@ export function AudioPlayer() {
                         </button>
                         {SLEEP_TIMER_OPTIONS.map((min) => (
                           <button
+                            type="button"
                             key={min}
                             onClick={() => { setSleepTimer(min); setShowSleepMenu(false); }}
                             className={cn(
