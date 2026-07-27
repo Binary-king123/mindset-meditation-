@@ -22,7 +22,7 @@ export function encodeAudioPath(backend: AudioBackend, key: string): string {
   return `${backend === 'r2' ? 'r2' : 'sb'}:${key}`;
 }
 
-export function parseAudioPath(path: string): { backend: AudioBackend; key: string } {
+function parseAudioPath(path: string): { backend: AudioBackend; key: string } {
   if (path.startsWith('sb:')) return { backend: 'supabase', key: path.slice(3) };
   if (path.startsWith('r2:')) return { backend: 'r2', key: path.slice(3) };
   return { backend: 'r2', key: path };

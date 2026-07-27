@@ -1,54 +1,116 @@
 // Tells the admin's browser where to put an audio file and how.
-//  - R2 configured  → a short-lived presigned PUT URL (direct to Cloudflare)
-//  - otherwise      → the private Supabase Storage bucket, uploaded with the
-//                     caller's own session (RLS allows admins to insert)
+//  - R2 configured, large file → a multipart upload: many presigned part URLs
+//                                the browser uploads in parallel
+//  - R2 configured, small file → a single short-lived presigned PUT
+//  - otherwise                 → the private Supabase Storage bucket, uploaded
+//                                with the caller's own session (RLS allows it)
 // Admin-gated either way.
 import { type NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
-import { presignPutUrl } from '@/lib/r2';
+import {
+  presignPutUrl,
+  startMultipart,
+  completeMultipart,
+  abortMultipart,
+  MULTIPART_THRESHOLD,
+  PART_SIZE,
+} from '@/lib/r2';
 import { AUDIO_BUCKET, audioBackend, encodeAudioPath } from '@/lib/audio-storage';
-import { ADMIN_COOKIE, adminIsVerified } from '@/lib/admin-verify';
+import { checkAdmin, ADMIN_DENIAL_RESPONSE } from '@/lib/admin-guard';
+
+/** Object keys are minted here, never taken from the client. */
+function newKey(filename: unknown): string {
+  const ext = String(filename || '')
+    .split('.')
+    .pop()
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]/g, '') || 'mp3';
+  return `podcasts/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+}
+
+function fail(message: string, status = 500) {
+  return NextResponse.json({ error: message }, { status });
+}
 
 export async function POST(req: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { data: role } = await supabase.rpc('get_user_role', { p_user_id: user.id });
-  if (role !== 'admin' && role !== 'super_admin') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const admin = await checkAdmin();
+  if (!admin.ok) {
+    const denial = ADMIN_DENIAL_RESPONSE[admin.reason ?? 'unauthenticated'];
+    return NextResponse.json({ error: denial.error }, { status: denial.status });
   }
 
-  // Second factor, checked here because the signing key is not available to
-  // Edge middleware (see the note in middleware.ts).
-  const verified = await adminIsVerified(req.cookies.get(ADMIN_COOKIE)?.value, user.id);
-  if (!verified) {
-    return NextResponse.json({ error: 'Admin verification required' }, { status: 403 });
-  }
+  const body = await req.json().catch(() => null);
+  if (!body) return fail('Malformed request', 400);
 
-  const { filename, contentType } = await req.json();
-  const ext = String(filename || '').split('.').pop()?.toLowerCase() || 'mp3';
-  const key = `podcasts/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const action: string = body.action ?? 'start';
   const backend = audioBackend();
 
-  if (backend === 'r2') {
+  // ---- finish or clean up an in-flight multipart upload ----
+  if (action === 'complete' || action === 'abort') {
+    const { key, uploadId } = body;
+    if (typeof key !== 'string' || typeof uploadId !== 'string') {
+      return fail('key and uploadId are required', 400);
+    }
+    // Keys are minted by this route and always live under podcasts/. Without
+    // this an admin-authenticated caller could complete or abort an upload
+    // anywhere in the bucket.
+    if (!key.startsWith('podcasts/') || key.includes('..')) {
+      return fail('Invalid key', 400);
+    }
+
     try {
-      const url = await presignPutUrl(key, contentType || 'audio/mpeg');
-      return NextResponse.json({ backend, url, key, audioPath: encodeAudioPath('r2', key) });
+      if (action === 'abort') {
+        await abortMultipart(key, uploadId);
+        return NextResponse.json({ ok: true });
+      }
+      const parts = Array.isArray(body.parts) ? body.parts : [];
+      if (parts.length === 0) return fail('No parts to complete', 400);
+      await completeMultipart(key, uploadId, parts);
+      return NextResponse.json({ ok: true, audioPath: encodeAudioPath('r2', key) });
     } catch (err) {
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Could not sign the upload URL' },
-        { status: 500 },
-      );
+      return fail(err instanceof Error ? err.message : 'Could not finalise the upload');
     }
   }
 
-  return NextResponse.json({
-    backend,
-    bucket: AUDIO_BUCKET,
-    key,
-    audioPath: encodeAudioPath('supabase', key),
-  });
+  // ---- start a new upload ----
+  const key = newKey(body.filename);
+  const contentType: string = body.contentType || 'audio/mpeg';
+  const size = Number(body.size) || 0;
+
+  if (backend !== 'r2') {
+    return NextResponse.json({
+      backend,
+      mode: 'single',
+      bucket: AUDIO_BUCKET,
+      key,
+      audioPath: encodeAudioPath('supabase', key),
+    });
+  }
+
+  try {
+    // Below the threshold the multipart handshake costs more than it saves.
+    if (size > MULTIPART_THRESHOLD) {
+      const partCount = Math.ceil(size / PART_SIZE);
+      const { uploadId, partUrls, partSize } = await startMultipart(key, contentType, partCount);
+      return NextResponse.json({
+        backend,
+        mode: 'multipart',
+        key,
+        uploadId,
+        partUrls,
+        partSize,
+        audioPath: encodeAudioPath('r2', key),
+      });
+    }
+
+    const url = await presignPutUrl(key, contentType);
+    return NextResponse.json({
+      backend,
+      mode: 'single',
+      url,
+      key,
+      audioPath: encodeAudioPath('r2', key),
+    });
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : 'Could not sign the upload URL');
+  }
 }

@@ -4,6 +4,22 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { slugify } from '@/lib/podcast';
+import { PLATFORMS, sanitizePlatformUrl, type PlatformLinks } from '@/lib/platforms';
+
+/**
+ * Keeps only known platform ids holding valid http(s) URLs. Without the
+ * protocol check an admin could store a `javascript:` URL that then runs for
+ * every visitor who clicks that platform button.
+ */
+function cleanPlatformLinks(input: PlatformLinks | undefined): PlatformLinks {
+  const out: PlatformLinks = {};
+  if (!input) return out;
+  for (const { id } of PLATFORMS) {
+    const url = input[id] ? sanitizePlatformUrl(input[id] as string) : null;
+    if (url) out[id] = url;
+  }
+  return out;
+}
 
 export async function toggleSave(trackId: string) {
   const supabase = await createClient();
@@ -76,55 +92,36 @@ export async function deleteComment(id: string) {
 
 // ---- Admin ----
 
-const CATEGORY_PALETTE = ['#8b5cf6', '#06b6d4', '#14b8a6', '#f59e0b', '#ec4899', '#22c55e'];
-
-/** Creates a category. RLS restricts categories to admins (migration 010). */
-export async function adminCreateCategory(input: { name: string; icon?: string }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: 'Please sign in' };
-
-  const name = input.name.trim();
-  if (!name) return { error: 'Category name is required' };
-  if (name.length > 100) return { error: 'Category name is too long' };
-
-  const { data: existing } = await supabase
-    .from('categories')
-    .select('id')
-    .ilike('name', name)
-    .is('deleted_at', null)
-    .maybeSingle();
-  if (existing) return { error: 'A category with that name already exists' };
-
-  const { count } = await supabase
-    .from('categories')
-    .select('id', { count: 'exact', head: true })
-    .is('deleted_at', null);
-
-  const { data, error } = await supabase
-    .from('categories')
-    .insert({
-      name,
-      slug: slugify(name),
-      icon: input.icon?.trim() || '🧘',
-      color: CATEGORY_PALETTE[(count ?? 0) % CATEGORY_PALETTE.length],
-      sort_order: (count ?? 0) + 1,
-    })
-    .select('id, name, icon')
-    .single();
-
-  if (error) return { error: error.message };
-  revalidatePath('/');
-  return { category: data };
+/**
+ * PostgREST reports a column the code expects but the database lacks as
+ * "Could not find the 'x' column … in the schema cache", which reads like a
+ * caching glitch. It almost always means the database is a migration behind
+ * the app, so say that instead of leaving the admin to guess.
+ */
+function schemaHint(message: string): string {
+  const behind = /schema cache|could not find the|does not exist/i.test(message);
+  return behind
+    ? `${message}\n\nThe database looks a migration behind the app. Run \`pnpm db:status\` and apply what is pending — see migrations/README.md.`
+    : message;
 }
 
-/**
- * Creates a playlist owned by the signed-in admin and visible to everyone.
- * RLS (migration 010) already restricts inserts to `user_id = auth.uid()`.
- */
-export async function adminCreatePlaylist(input: { title: string; description?: string }) {
+/** Playlists are how listeners browse, so every change touches these three. */
+function revalidatePlaylist(slug?: string | null) {
+  revalidatePath('/');
+  revalidatePath('/playlists');
+  if (slug) revalidatePath(`/playlist/${slug}`);
+}
+
+export interface PlaylistInput {
+  title: string;
+  description?: string;
+  /** Only set when a new cover was uploaded. */
+  coverUrl?: string | null;
+  coverPath?: string | null;
+  isPublic?: boolean;
+}
+
+export async function adminCreatePlaylist(input: PlaylistInput) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -149,27 +146,81 @@ export async function adminCreatePlaylist(input: { title: string; description?: 
       user_id: user.id,
       title,
       description: input.description?.trim() || null,
+      thumbnail_url: input.coverUrl || null,
+      thumbnail_path: input.coverPath || null,
       slug: slugify(title),
-      is_public: true,
+      is_public: input.isPublic ?? true,
     })
     .select('id, title, slug')
     .single();
 
-  if (error) return { error: error.message };
-  revalidatePath('/playlists');
+  if (error) return { error: schemaHint(error.message) };
+  revalidatePlaylist(data.slug);
   return { playlist: data };
+}
+
+export async function adminUpdatePlaylist(input: PlaylistInput & { id: string }) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: 'Please sign in' };
+
+  const title = input.title.trim();
+  if (!title) return { error: 'Playlist name is required' };
+  if (title.length > 200) return { error: 'Playlist name is too long' };
+
+  // biome-ignore lint/suspicious/noExplicitAny: partial update over an untyped row
+  const patch: Record<string, any> = {
+    title,
+    description: input.description?.trim() || null,
+  };
+  if (input.isPublic !== undefined) patch.is_public = input.isPublic;
+  // Only replace the artwork when a new file was actually uploaded — otherwise
+  // saving the title would silently wipe the existing cover.
+  if (input.coverUrl) {
+    patch.thumbnail_url = input.coverUrl;
+    patch.thumbnail_path = input.coverPath ?? null;
+  }
+
+  const { data, error } = await supabase
+    .from('playlists')
+    .update(patch)
+    .eq('id', input.id)
+    .select('id, title, slug')
+    .single();
+
+  if (error) return { error: schemaHint(error.message) };
+  revalidatePlaylist(data.slug);
+  return { playlist: data };
+}
+
+/** Soft delete, matching adminDeletePodcast — the episodes inside are kept. */
+export async function adminDeletePlaylist(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('playlists')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('slug')
+    .maybeSingle();
+
+  if (error) return { error: error.message };
+  revalidatePlaylist(data?.slug);
+  return { ok: true };
 }
 
 interface CreatePodcastInput {
   title: string;
   channel?: string;
   description?: string;
-  categoryId?: string | null;
   playlistId?: string | null;
   durationSeconds: number;
   audioPath: string;
   coverUrl?: string | null;
   coverPath?: string | null;
+  /** Per-episode overrides of the show-wide platform links. */
+  platformLinks?: PlatformLinks;
   publish: boolean;
 }
 
@@ -196,14 +247,14 @@ export async function adminCreatePodcast(input: CreatePodcastInput) {
       audio_path: input.audioPath,
       thumbnail_url: input.coverUrl || null,
       thumbnail_path: input.coverPath || null,
-      category_id: input.categoryId || null,
       instructor_name: input.channel?.trim() || null,
+      platform_links: cleanPlatformLinks(input.platformLinks),
       status: input.publish ? 'published' : 'draft',
     })
     .select('id, slug')
     .single();
 
-  if (error) return { error: error.message };
+  if (error) return { error: schemaHint(error.message) };
 
   // Attach to a playlist, appending to the end. The trg_playlist_stats trigger
   // keeps track_count / total_duration_seconds in sync.
@@ -236,7 +287,6 @@ interface UpdatePodcastInput {
   title: string;
   channel?: string;
   description?: string;
-  categoryId?: string | null;
   playlistId?: string | null;
   /** Only set when the admin replaced the audio file. */
   audioPath?: string | null;
@@ -244,6 +294,8 @@ interface UpdatePodcastInput {
   /** Only set when the admin replaced the cover. */
   coverUrl?: string | null;
   coverPath?: string | null;
+  /** Per-episode overrides of the show-wide platform links. */
+  platformLinks?: PlatformLinks;
 }
 
 /** Edits an existing episode. RLS restricts track updates to admins/moderators. */
@@ -262,7 +314,6 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
     title,
     description: input.description?.trim() || null,
     short_description: input.description?.trim().slice(0, 300) || null,
-    category_id: input.categoryId || null,
     instructor_name: input.channel?.trim() || null,
   };
 
@@ -278,6 +329,9 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
     patch.thumbnail_url = input.coverUrl;
     patch.thumbnail_path = input.coverPath ?? null;
   }
+  if (input.platformLinks) {
+    patch.platform_links = cleanPlatformLinks(input.platformLinks);
+  }
 
   const { data, error } = await supabase
     .from('tracks')
@@ -285,7 +339,7 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
     .eq('id', input.id)
     .select('id, slug')
     .single();
-  if (error) return { error: error.message };
+  if (error) return { error: schemaHint(error.message) };
 
   // Move between playlists: drop the old membership, append to the new one.
   if (input.playlistId !== undefined) {
@@ -323,6 +377,43 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
   revalidatePath('/admin/podcasts');
   revalidatePath(`/podcast/${data.slug}`);
   return { podcast: data };
+}
+
+/**
+ * Updates the platform links for the whole podcast — the list behind
+ * /admin/links. Per-episode overrides live on tracks.platform_links.
+ *
+ * RLS (show_manage_admin) is what authorizes this; a non-admin's update matches
+ * no row and changes nothing.
+ */
+export async function adminUpdatePlatformLinks(input: { platformLinks?: PlatformLinks }) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: 'Please sign in' };
+
+  const cleaned = cleanPlatformLinks(input.platformLinks);
+
+  // .select() so we can tell whether a row was actually written. Without it an
+  // RLS-blocked update returns no error and updates nothing, which is exactly
+  // how a save can look successful yet change nothing.
+  const { data, error } = await supabase
+    .from('show')
+    .update({ platform_links: cleaned })
+    .eq('id', true)
+    .select('platform_links');
+  if (error) return { error: schemaHint(error.message) };
+  if (!data || data.length === 0) {
+    // The singleton row exists on a seeded database, so no match means the
+    // caller was not allowed to write it.
+    return { error: 'Could not save — this account is not allowed to edit the show links.' };
+  }
+
+  // The homepage is cached (revalidate = 300), so it needs an explicit nudge
+  // for a links change to show up straight away.
+  revalidatePath('/', 'layout');
+  return { ok: true, platformLinks: data[0].platform_links as PlatformLinks };
 }
 
 export async function adminSetStatus(id: string, status: 'draft' | 'published' | 'archived') {
