@@ -19,20 +19,22 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: '/apple-icon', sizes: '180x180', type: 'image/png', purpose: 'maskable' },
     ],
     screenshots: [],
+    // Icons point at the generated apple-icon route; /icon-192.png never
+    // existed and 404'd on every shortcut.
     shortcuts: [
       {
-        name: 'Browse sessions',
-        short_name: 'Sessions',
-        description: 'Browse guided meditation sessions',
-        url: '/#sessions',
-        icons: [{ src: '/icon-192.png', sizes: '192x192' }],
+        name: 'Browse episodes',
+        short_name: 'Episodes',
+        description: 'Browse the latest podcast episodes',
+        url: '/#episodes',
+        icons: [{ src: '/apple-icon', sizes: '180x180' }],
       },
       {
         name: 'Your library',
         short_name: 'Saved',
-        description: 'Your saved meditation sessions',
+        description: 'Your saved episodes',
         url: '/saved',
-        icons: [{ src: '/icon-192.png', sizes: '192x192' }],
+        icons: [{ src: '/apple-icon', sizes: '180x180' }],
       },
     ],
   };

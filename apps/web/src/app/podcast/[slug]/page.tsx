@@ -10,11 +10,16 @@ import { PlayButton } from '@/components/podcast/play-button';
 import { LikeButton } from '@/components/podcast/like-button';
 import { ShareButton } from '@/components/podcast/share-button';
 import { Comments, type CommentItem } from '@/components/podcast/comments';
-import { PodcastCard, type CardPodcast } from '@/components/podcast/podcast-card';
+import { commentAuthorName, type CommentRow } from '@/lib/comments';
+import {PodcastCard} from '@/components/podcast/podcast-card';
+
 import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
+import { PlatformButtons } from '@/components/podcast/platform-buttons';
 import { createClient } from '@/lib/supabase/server';
-import { PODCAST_SELECT, formatDuration } from '@/lib/podcast';
+import { PODCAST_SELECT, formatDuration, type EpisodeSummary } from '@/lib/podcast';
 import { BRAND } from '@/lib/brand';
+import { getShow } from '@/lib/show';
+import { parsePlatformLinks, resolvePlatformLinks } from '@/lib/platforms';
 import { JsonLd, pageMetadata, episodeLd, breadcrumbLd } from '@/lib/seo';
 
 export const dynamic = 'force-dynamic';
@@ -50,6 +55,38 @@ export async function generateMetadata({
   });
 }
 
+/**
+ * Other episodes from the same playlist. Replaces the old same-category lookup:
+ * with categories gone, the series an episode belongs to is both the only
+ * grouping and the stronger signal — people who liked part 3 want part 4.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: untyped podcast schema client
+async function relatedFromPlaylist(supabase: any, trackId: string) {
+  const { data: membership } = await supabase
+    .from('playlist_tracks')
+    .select('playlist_id')
+    .eq('track_id', trackId)
+    .maybeSingle();
+  if (!membership?.playlist_id) return { data: [] };
+
+  const { data: siblings } = await supabase
+    .from('playlist_tracks')
+    .select(`position, track:tracks(${PODCAST_SELECT})`)
+    .eq('playlist_id', membership.playlist_id)
+    .neq('track_id', trackId)
+    .order('position', { ascending: true })
+    .limit(4);
+
+  return {
+    data: ((siblings ?? []) as Array<{ track: unknown }>)
+      .map((row) => row.track)
+      .filter(Boolean)
+      // Drafts are filtered here rather than in the query: the join makes a
+      // nested .eq() awkward, and a playlist holds at most a handful of rows.
+      .filter((t) => (t as { status?: string }).status === 'published'),
+  };
+}
+
 export default async function PodcastPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const supabase = await createClient();
@@ -63,7 +100,6 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
 
   // biome-ignore lint/suspicious/noExplicitAny: untyped podcast schema row
   const p = podcast as any;
-  const accent = p.category?.color ?? '#8b5cf6';
 
   const {
     data: { user },
@@ -87,17 +123,7 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
             .eq('user_id', user.id)
             .maybeSingle()
         : Promise.resolve({ data: null }),
-      p.category_id
-        ? supabase
-            .from('tracks')
-            .select(PODCAST_SELECT)
-            .eq('status', 'published')
-            .eq('category_id', p.category_id)
-            .neq('id', p.id)
-            .is('deleted_at', null)
-            .order('created_at', { ascending: false })
-            .limit(4)
-        : Promise.resolve({ data: [] }),
+      relatedFromPlaylist(supabase, p.id),
       user
         ? supabase.rpc('get_user_role', { p_user_id: user.id })
         : Promise.resolve({ data: null }),
@@ -121,18 +147,24 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
       .map((r) => r.id),
   );
 
-  const comments: CommentItem[] = ((commentRows ?? []) as Array<Record<string, any>>).map((c) => ({
+  const comments: CommentItem[] = ((commentRows ?? []) as unknown as CommentRow[]).map((c) => ({
     id: c.id,
     body: c.body,
     created_at: c.created_at,
     parent_id: c.parent_id ?? null,
-    author:
-      c.author?.full_name || c.author?.username || c.author?.email?.split('@')[0] || 'Listener',
+    author: commentAuthorName(c.author),
     mine: !!user && c.user_id === user.id,
     isAdmin: staffIds.has(c.user_id),
   }));
 
-  const related = (relatedRows ?? []) as unknown as CardPodcast[];
+  const related = (relatedRows ?? []) as unknown as EpisodeSummary[];
+
+  // This episode's own links win; anything left blank falls back to the
+  // show-wide link, so most episodes need no per-episode setup at all.
+  const platforms = resolvePlatformLinks(
+    (await getShow()).platformLinks,
+    parsePlatformLinks(p.platform_links),
+  );
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -146,11 +178,11 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
             thumbnailUrl: p.thumbnail_url,
             createdAt: p.created_at,
             hostName: p.instructor_name,
-            categoryName: p.category?.name,
+            platforms,
           }),
           breadcrumbLd([
             { name: 'Home', path: '/' },
-            { name: 'Sessions', path: '/#sessions' },
+            { name: 'Episodes', path: '/#episodes' },
             { name: p.title, path: `/podcast/${p.slug}` },
           ]),
         ]}
@@ -173,7 +205,10 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
             ) : (
               <div
                 className="w-full h-full"
-                style={{ background: `linear-gradient(140deg, ${accent}88, transparent 70%)` }}
+                style={{
+                  background:
+                    'linear-gradient(140deg, hsl(var(--aura-1)/0.55), hsl(var(--aura-2)/0.3) 60%, transparent 80%)',
+                }}
               />
             )}
             <div className="absolute inset-0 bg-gradient-to-b from-background/70 via-background/85 to-background" />
@@ -182,11 +217,11 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
           <div className="max-w-5xl mx-auto w-full">
             <Reveal>
               <Link
-                href="/#sessions"
+                href="/#episodes"
                 className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-8 group"
               >
                 <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-1" />
-                All sessions
+                All episodes
               </Link>
             </Reveal>
 
@@ -205,33 +240,23 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
                   ) : (
                     <div
                       className="w-full h-full flex items-center justify-center text-7xl"
-                      style={{ background: `linear-gradient(140deg, ${accent} 0%, ${accent}55 100%)` }}
+                      style={{
+                        background:
+                          'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-2)) 60%, hsl(var(--aura-4)) 100%)',
+                      }}
                     >
-                      {p.category?.icon ?? '🧘'}
+                      <span className="w-1/3 aspect-square rounded-full border-2 border-foreground/50 grid place-items-center">
+                        <span className="w-1/3 aspect-square rounded-full bg-foreground/90" />
+                      </span>
                     </div>
                   )}
                 </div>
               </Reveal>
 
               <div className="flex-1 text-center md:text-left">
-                {p.category && (
-                  <Reveal delay={0.05}>
-                    <span
-                      className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full mb-4"
-                      style={{
-                        color: accent,
-                        background: `${accent}1f`,
-                        boxShadow: `inset 0 0 0 1px ${accent}44`,
-                      }}
-                    >
-                      {p.category.icon} {p.category.name}
-                    </span>
-                  </Reveal>
-                )}
-
                 <Reveal delay={0.1}>
                   <h1
-                    className="text-3xl md:text-5xl font-black text-foreground mb-3 leading-tight text-balance"
+                    className="text-2xl sm:text-3xl md:text-5xl font-black text-foreground mb-3 leading-tight text-balance"
                     style={{ fontFamily: 'var(--font-outfit)' }}
                   >
                     {p.title}
@@ -274,6 +299,21 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
                     <ShareButton title={p.title} path={`/podcast/${p.slug}`} />
                   </div>
                 </Reveal>
+
+                {platforms.length > 0 && (
+                  <Reveal delay={0.26}>
+                    <div className="mt-7">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-3">
+                        Also listen on
+                      </p>
+                      <PlatformButtons
+                        platforms={platforms}
+                        variant="compact"
+                        className="justify-center md:justify-start"
+                      />
+                    </div>
+                  </Reveal>
+                )}
               </div>
             </div>
           </div>

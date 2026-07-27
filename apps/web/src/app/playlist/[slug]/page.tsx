@@ -2,15 +2,15 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { notFound } from 'next/navigation';
-import { ChevronLeft, ListMusic } from 'lucide-react';
+import { ChevronLeft, Heart, ListMusic } from 'lucide-react';
 import { Navbar } from '@/components/layout/navbar';
 import { Footer } from '@/components/layout/footer';
 import { AudioPlayer } from '@/components/player/audio-player';
-import { PodcastCard, type CardPodcast } from '@/components/podcast/podcast-card';
+import { EpisodeRow, type EpisodeItem } from '@/components/podcast/episode-row';
 import { PlaylistPlayButton } from '@/components/playlist/playlist-play-button';
 import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
 import { createClient } from '@/lib/supabase/server';
-import { PODCAST_SELECT, formatPlaylistMeta } from '@/lib/podcast';
+import { PODCAST_SELECT, formatPlaylistMeta, type EpisodeSummary } from '@/lib/podcast';
 import { BRAND } from '@/lib/brand';
 import { JsonLd, pageMetadata, playlistLd, breadcrumbLd } from '@/lib/seo';
 
@@ -72,10 +72,10 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
   // for visitors, which surfaces here as a null embed.
   const tracks = ((rows ?? []) as Array<{ track: unknown }>)
     .map((r) => r.track)
-    .filter(Boolean) as CardPodcast[];
+    .filter(Boolean) as EpisodeSummary[];
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col stream-shell">
       <JsonLd
         data={[
           playlistLd({
@@ -128,7 +128,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
               </Link>
             </Reveal>
 
-            <div className="flex flex-col md:flex-row gap-8 md:gap-10">
+            <div className="flex flex-col md:flex-row gap-8 md:gap-10 stream-panel rounded-[2rem] p-6 md:p-8">
               <Reveal direction="scale" className="shrink-0 mx-auto md:mx-0">
                 <div className="relative w-56 md:w-64 aspect-square rounded-3xl overflow-hidden glow-primary-lg">
                   {playlist.thumbnail_url ? (
@@ -148,7 +148,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
                           'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-4)) 55%, hsl(var(--aura-2)) 100%)',
                       }}
                     >
-                      <ListMusic className="w-20 h-20 text-white/90" />
+                      <ListMusic className="w-20 h-20 text-foreground/90" />
                     </div>
                   )}
                 </div>
@@ -164,7 +164,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
 
                 <Reveal delay={0.1}>
                   <h1
-                    className="text-3xl md:text-5xl font-black text-foreground mb-3 leading-tight text-balance"
+                    className="text-2xl sm:text-3xl md:text-5xl font-black text-foreground mb-3 leading-tight text-balance"
                     style={{ fontFamily: 'var(--font-outfit)' }}
                   >
                     {playlist.title}
@@ -172,14 +172,14 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
                 </Reveal>
 
                 <Reveal delay={0.14}>
-                  <p className="text-muted-foreground mb-5">
+                  <p className="text-foreground/60 mb-5">
                     {formatPlaylistMeta(tracks.length, playlist.total_duration_seconds)}
                   </p>
                 </Reveal>
 
                 {playlist.description && (
                   <Reveal delay={0.18}>
-                    <p className="text-foreground/80 leading-relaxed mb-6 max-w-xl">
+                    <p className="text-foreground/72 leading-relaxed mb-6 max-w-xl">
                       {playlist.description}
                     </p>
                   </Reveal>
@@ -189,6 +189,13 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
                   <Reveal delay={0.22}>
                     <div className="flex items-center justify-center md:justify-start gap-3 flex-wrap">
                       <PlaylistPlayButton tracks={tracks} />
+                      <Link
+                        href="/playlists?tab=saved"
+                        className="inline-flex items-center gap-2 px-5 py-3 rounded-full border border-foreground/10 bg-foreground/5 text-foreground font-semibold"
+                      >
+                        <Heart className="w-4 h-4" />
+                        Saved
+                      </Link>
                     </div>
                   </Reveal>
                 )}
@@ -200,7 +207,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
         <div className="px-4 md:px-8 max-w-5xl mx-auto w-full">
           {tracks.length === 0 ? (
             <Reveal direction="scale">
-              <div className="glass-card rounded-3xl p-16 text-center">
+              <div className="stream-card rounded-3xl p-16 text-center">
                 <p className="text-foreground font-bold text-lg mb-2">This playlist is empty</p>
                 <p className="text-muted-foreground text-sm">
                   Sessions added to it will show up here.
@@ -209,22 +216,27 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
             </Reveal>
           ) : (
             <section>
-              <Reveal>
-                <h2
-                  className="text-2xl font-black text-foreground mb-6"
-                  style={{ fontFamily: 'var(--font-outfit)' }}
-                >
-                  In this playlist
-                </h2>
-              </Reveal>
-              <RevealGroup
-                stagger={0.06}
-                className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-5"
-              >
-                {tracks.map((t) => (
+              <div className="flex items-center justify-between mb-4">
+                <Reveal>
+                  <h2
+                    className="text-2xl font-black text-foreground"
+                    style={{ fontFamily: 'var(--font-outfit)' }}
+                  >
+                    Episodes
+                  </h2>
+                </Reveal>
+                <Reveal>
+                  <span className="text-sm text-muted-foreground">
+                    {tracks.length} episode{tracks.length === 1 ? '' : 's'}
+                  </span>
+                </Reveal>
+              </div>
+              {/* Spotify-style row list — the whole playlist is the queue, so
+                  skip-next follows its order. */}
+              <RevealGroup stagger={0.04} className="space-y-2.5">
+                {(tracks as unknown as EpisodeItem[]).map((t) => (
                   <RevealItem key={t.id}>
-                    {/* queue = the whole playlist, so skip-next follows its order */}
-                    <PodcastCard podcast={t} queue={tracks} />
+                    <EpisodeRow podcast={t} queue={tracks as unknown as EpisodeItem[]} />
                   </RevealItem>
                 ))}
               </RevealGroup>

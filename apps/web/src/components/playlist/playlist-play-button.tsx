@@ -1,14 +1,14 @@
 'use client';
 
+import type { EpisodeSummary } from '@/lib/podcast';
 import { motion } from 'framer-motion';
 import { Play, Pause } from 'lucide-react';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
 import { usePlayerStore } from '@/store/player.store';
-import type { CardPodcast } from '@/components/podcast/podcast-card';
 import type { Track } from '@mindset/types';
 
 /** Plays a playlist from the top, queueing every session in order. */
-export function PlaylistPlayButton({ tracks }: { tracks: CardPodcast[] }) {
+export function PlaylistPlayButton({ tracks }: { tracks: EpisodeSummary[] }) {
   const { play, pause, resume } = useAudioPlayer();
   const currentId = usePlayerStore((s) => s.currentTrack?.id);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
@@ -33,9 +33,9 @@ export function PlaylistPlayButton({ tracks }: { tracks: CardPodcast[] }) {
       transition={{ type: 'spring', stiffness: 400, damping: 22 }}
       className="shine relative flex items-center gap-3 pl-3 pr-7 py-3 bg-primary text-white rounded-full font-bold glow-primary hover:bg-primary/90 transition-colors"
     >
-      <span className="relative grid place-items-center w-9 h-9 rounded-full bg-white/20">
+      <span className="relative grid place-items-center w-9 h-9 rounded-full bg-foreground/20">
         {playing && (
-          <span className="absolute inset-0 rounded-full border border-white/50 pulse-ring" />
+          <span className="absolute inset-0 rounded-full border border-foreground/50 pulse-ring" />
         )}
         {playing ? (
           <Pause className="w-4 h-4" fill="currentColor" />

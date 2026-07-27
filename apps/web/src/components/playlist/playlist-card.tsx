@@ -6,11 +6,25 @@ import { motion } from 'framer-motion';
 import { ListMusic, Play } from 'lucide-react';
 import { formatPlaylistMeta, type PlaylistSummary } from '@/lib/podcast';
 
+const PLAYLIST_FALLBACKS = [
+  '/playlist-fallback-1.png',
+  '/playlist-fallback-2.jpeg',
+  '/playlist-fallback-3.jpeg',
+] as const;
+
 /**
  * Playlist tile with the stacked-cards look that signals "this is a set, not a
  * single episode" — the same visual cue YouTube uses.
  */
-export function PlaylistCard({ playlist }: { playlist: PlaylistSummary }) {
+export function PlaylistCard({
+  playlist,
+  fallbackIndex = 0,
+}: {
+  playlist: PlaylistSummary;
+  fallbackIndex?: number;
+}) {
+  const artwork = playlist.thumbnail_url || PLAYLIST_FALLBACKS[fallbackIndex % PLAYLIST_FALLBACKS.length];
+
   return (
     <motion.article
       whileHover={{ y: -6 }}
@@ -21,7 +35,7 @@ export function PlaylistCard({ playlist }: { playlist: PlaylistSummary }) {
         {/* Offset layers peeking out behind the cover */}
         <div className="relative pt-2.5 px-2.5">
           <span
-            className="absolute top-0 left-6 right-6 h-3 rounded-t-xl bg-foreground/10 dark:bg-white/10 transition-all duration-500 group-hover:left-5 group-hover:right-5"
+            className="absolute top-0 left-6 right-6 h-3 rounded-t-xl bg-foreground/10 dark:bg-foreground/10 transition-all duration-500 group-hover:left-5 group-hover:right-5"
             aria-hidden
           />
           <span
@@ -31,25 +45,13 @@ export function PlaylistCard({ playlist }: { playlist: PlaylistSummary }) {
 
           <div className="gradient-ring relative rounded-2xl overflow-hidden glass-card">
             <div className="relative aspect-square overflow-hidden">
-              {playlist.thumbnail_url ? (
-                <Image
-                  src={playlist.thumbnail_url}
-                  alt={playlist.title}
-                  fill
-                  className="object-cover transition-transform duration-slow ease-smooth group-hover:scale-110"
-                  sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                />
-              ) : (
-                <div
-                  className="w-full h-full grid place-items-center transition-transform duration-slow group-hover:scale-110"
-                  style={{
-                    background:
-                      'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-4)) 55%, hsl(var(--aura-2)) 100%)',
-                  }}
-                >
-                  <ListMusic className="w-12 h-12 text-white/90" />
-                </div>
-              )}
+              <Image
+                src={artwork}
+                alt={playlist.title}
+                fill
+                className="object-cover transition-transform duration-slow ease-smooth group-hover:scale-110"
+                sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              />
 
               <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent opacity-75 group-hover:opacity-95 transition-opacity duration-500" />
 

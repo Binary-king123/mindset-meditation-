@@ -6,28 +6,15 @@ import { motion } from 'framer-motion';
 import { Play, MessageCircle, Heart } from 'lucide-react';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
 import { usePlayerStore } from '@/store/player.store';
-import { formatDuration } from '@/lib/podcast';
+import { formatDuration, type EpisodeSummary } from '@/lib/podcast';
 import { cn } from '@/lib/utils';
 import type { Track } from '@mindset/types';
 
-export interface CardPodcast {
-  id: string;
-  title: string;
-  slug: string;
-  thumbnail_url?: string | null;
-  instructor_name?: string | null;
-  duration_seconds: number;
-  favorite_count?: number;
-  comment_count?: number;
-  category?: { name: string; color: string | null; icon: string | null } | null;
-}
-
-export function PodcastCard({ podcast, queue }: { podcast: CardPodcast; queue?: CardPodcast[] }) {
+export function PodcastCard({ podcast, queue }: { podcast: EpisodeSummary; queue?: EpisodeSummary[] }) {
   const { play } = useAudioPlayer();
   const currentId = usePlayerStore((s) => s.currentTrack?.id);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const isActive = currentId === podcast.id;
-  const accent = podcast.category?.color ?? '#8b5cf6';
 
   return (
     <motion.article
@@ -51,10 +38,16 @@ export function PodcastCard({ podcast, queue }: { podcast: CardPodcast; queue?: 
             />
           ) : (
             <div
-              className="w-full h-full flex items-center justify-center text-5xl transition-transform duration-slow group-hover:scale-110"
-              style={{ background: `linear-gradient(140deg, ${accent} 0%, ${accent}55 60%, transparent 100%)` }}
+              className="w-full h-full grid place-items-center transition-transform duration-slow group-hover:scale-110"
+              style={{
+                background:
+                  'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-2)) 60%, hsl(var(--aura-4)) 100%)',
+              }}
             >
-              <span className="drop-shadow-lg">{podcast.category?.icon ?? '🧘'}</span>
+              {/* Brand breath mark, so a coverless episode still looks deliberate */}
+              <span className="w-1/3 aspect-square rounded-full border-2 border-foreground/50 grid place-items-center">
+                <span className="w-1/3 aspect-square rounded-full bg-foreground/90" />
+              </span>
             </div>
           )}
 
@@ -109,14 +102,6 @@ export function PodcastCard({ podcast, queue }: { podcast: CardPodcast; queue?: 
       </div>
 
       <div className="p-4">
-        {podcast.category && (
-          <span
-            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full mb-2"
-            style={{ color: accent, background: `${accent}1f`, boxShadow: `inset 0 0 0 1px ${accent}33` }}
-          >
-            {podcast.category.icon} {podcast.category.name}
-          </span>
-        )}
         <Link href={`/podcast/${podcast.slug}`} className="block">
           <h3 className="font-bold text-foreground line-clamp-2 leading-snug group-hover:text-primary transition-colors duration-300">
             {podcast.title}
