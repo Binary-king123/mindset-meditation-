@@ -15,7 +15,6 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   signOut: () => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -57,20 +56,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function loadUserProfile(supabaseUser: User) {
     try {
+      // One round-trip, not two. `role` is a column on profiles and the
+      // profiles_select_own RLS policy already lets a user read their own row,
+      // so the separate get_user_role RPC this used to make was pure latency —
+      // and it sat in front of the navbar rendering on every page load.
       const { data: profile } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', supabaseUser.id)
         .single();
 
-      const { data: roleData } = await supabase
-        .rpc('get_user_role', { p_user_id: supabaseUser.id });
-
       setUser({
         id: supabaseUser.id,
         email: supabaseUser.email ?? '',
-        role: (roleData as UserRole) ?? 'user',
-        is_premium: false, // Will be updated by subscription check
+        role: (profile?.role as UserRole) ?? 'user',
         profile: profile ?? undefined,
       });
     } catch {
@@ -90,15 +89,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.refresh();
   }
 
-  async function resetPassword(email: string) {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset-password`,
-    });
-    if (error) throw new Error(error.message);
-  }
+  // Password reset lives in a server action (requestPasswordResetAction), not
+  // here: the link is minted with the service role and delivered over our own
+  // SMTP rather than Supabase's built-in sender.
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signOut, resetPassword }}>
+    <AuthContext.Provider value={{ user, session, loading, signOut }}>
       {children}
     </AuthContext.Provider>
   );
