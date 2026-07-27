@@ -15,6 +15,12 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // Small phones (iPhone SE / mini, 360–414px) need their own step: at that
+      // width the hero panel has to give back padding and drop a type size, and
+      // Tailwind's smallest default breakpoint is already 640px.
+      screens: {
+        xs: '400px',
+      },
       colors: {
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',

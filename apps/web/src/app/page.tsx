@@ -1,507 +1,528 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import Image from 'next/image';
 import {
-  Moon,
-  Brain,
-  Heart,
-  Sparkles,
-  Play,
-  Bookmark,
-  MessageCircle,
-  Quote,
   ArrowRight,
-  Plus,
-  type LucideIcon,
+  BadgeCheck,
+  ExternalLink,
+  Flower2,
+  Play,
+  Radio,
+  ShieldCheck,
+  Signal,
 } from 'lucide-react';
 import { Navbar } from '@/components/layout/navbar';
 import { Footer } from '@/components/layout/footer';
 import { AudioPlayer } from '@/components/player/audio-player';
-import { PodcastCard, type CardPodcast } from '@/components/podcast/podcast-card';
-import { Hero } from '@/components/home/hero';
-import { Marquee } from '@/components/home/marquee';
-import { CategoryChips, type ChipCategory } from '@/components/home/category-chips';
+import { NowPlayingCard } from '@/components/home/now-playing-card';
 import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
-import { PlaylistCard } from '@/components/playlist/playlist-card';
-import { createClient } from '@/lib/supabase/server';
-import { PODCAST_SELECT, PLAYLIST_SELECT, type PlaylistSummary } from '@/lib/podcast';
-import { BRAND } from '@/lib/brand';
-import { JsonLd, pageMetadata, faqLd, itemListLd, breadcrumbLd } from '@/lib/seo';
+import { createPublicClient } from '@/lib/supabase/public';
+import {
+  PODCAST_SELECT,
+  formatDuration,
+  type DatedEpisode,
+  type EpisodeSummary,
+} from '@/lib/podcast';
+import { getShow } from '@/lib/show';
+import { type ResolvedPlatform, HARDCODED_PLATFORMS } from '@/lib/platforms';
+import {
+  JsonLd,
+  pageMetadata,
+  organizationLd,
+  webSiteLd,
+  podcastSeriesLd,
+  siteNavigationLd,
+  breadcrumbLd,
+} from '@/lib/seo';
 
-export const metadata: Metadata = pageMetadata({
-  // Kept to ~56 chars so Google renders it whole, keyword first, brand last.
-  title: 'Guided Meditation for Sleep & Stress | Mindset Meditation',
-  absoluteTitle: true,
-  description:
-    'Free guided meditations for sleep, anxiety, stress and focus. Stream calming sessions, save your favourites, and build a daily mindfulness habit that sticks.',
-  path: '/',
-  keywords: [
-    'guided meditation',
-    'free guided meditation',
-    'sleep meditation',
-    'meditation for anxiety',
-    'mindfulness',
-    'breathwork',
-  ],
-});
+export const revalidate = 300;
 
-export const dynamic = 'force-dynamic';
+const SEO_DESCRIPTION =
+  'Official website of The Mindset Meditation podcast. Listen free on our website or choose Spotify, Apple Podcasts, Amazon Music, YouTube Music, and more.';
 
-// Real answers to what people actually search — and the source for the
-// FAQPage schema, which is what earns the expandable FAQ block in Google.
-const FAQS: Array<{ question: string; answer: string }> = [
+/** The four promises under the hero copy. Icons carry the meaning, not decoration. */
+const HERO_PROOF = [
+  { icon: BadgeCheck, label: '100% Free', detail: 'Always' },
+  { icon: ShieldCheck, label: 'No Interruptions', detail: 'Ad-light' },
+  { icon: Signal, label: 'High Quality', detail: 'Crystal clear' },
+  { icon: Radio, label: 'Listen Anywhere', detail: 'Your choice' },
+];
+
+const EPISODE_BADGES = ['Sleep', 'Mindfulness', 'Relaxation'];
+
+const DEMO_EPISODES: DatedEpisode[] = [
   {
-    question: 'What is the best meditation for sleep?',
-    answer:
-      'Body scans and slow breathwork work best at night because they move attention away from thought and into physical sensation. Start with a 10-minute wind-down session in the Sleep & Relaxation category, lying down, with the sleep timer set so the audio stops on its own.',
+    id: 'demo-1',
+    title: 'Morning Calm Meditation',
+    slug: 'playlists',
+    thumbnail_url: '/playlist-fallback-1.png',
+    short_description: 'Ease into the day with a peaceful guided breathing session.',
+    duration_seconds: 133,
+    instructor_name: null,
+    created_at: '2026-07-22T00:00:00.000Z',
   },
   {
-    question: 'How long should I meditate each day?',
-    answer:
-      'Ten minutes a day, done consistently, beats an hour once a week. Consistency is what builds the habit, so pick a length you will actually repeat — even three minutes counts on a busy day.',
+    id: 'demo-2',
+    title: 'Still Water Relaxation',
+    slug: 'playlists',
+    thumbnail_url: '/playlist-fallback-2.jpeg',
+    short_description: 'Soft meditation audio inspired by quiet lakes and slow sunrise light.',
+    duration_seconds: 281,
+    instructor_name: null,
+    created_at: '2026-07-21T00:00:00.000Z',
   },
   {
-    question: 'Does meditation actually help with anxiety and stress?',
-    answer:
-      'Mindfulness and breath-focused practices are widely used to reduce day-to-day stress and calm a racing mind, and are the basis of programmes like mindfulness-based stress reduction. They are a supportive practice, not a substitute for medical care — speak to a doctor about persistent or severe anxiety.',
-  },
-  {
-    question: 'Do I need any experience to start meditating?',
-    answer:
-      'No. Every session is guided from start to finish, so you simply follow the voice. A wandering mind is not failure — noticing that it wandered and coming back is the practice itself.',
-  },
-  {
-    question: `Is ${BRAND.name} free to use?`,
-    answer:
-      'You can preview any session for free, and creating an account lets you save sessions to your library, follow full playlists, and pick up where you left off.',
+    id: 'demo-3',
+    title: 'Nature Path Mindfulness',
+    slug: 'playlists',
+    thumbnail_url: '/playlist-fallback-3.jpeg',
+    short_description: 'A grounding mindfulness practice shaped around walking, breath, and focus.',
+    duration_seconds: 356,
+    instructor_name: null,
+    created_at: '2026-07-20T00:00:00.000Z',
   },
 ];
 
-const BENEFITS: Array<{ icon: LucideIcon; title: string; text: string; tint: string }> = [
-  {
-    icon: Moon,
-    title: 'Sleep deeper',
-    text: 'Wind-down sessions that quiet a racing mind so you drift off faster and stay there.',
-    tint: 'var(--aura-1)',
-  },
-  {
-    icon: Brain,
-    title: 'Focus & clarity',
-    text: 'Short guided resets that clear mental clutter and put you back in control of your attention.',
-    tint: 'var(--aura-2)',
-  },
-  {
-    icon: Heart,
-    title: 'Feel calmer',
-    text: 'Breathwork and mindfulness that lower stress and anxiety in a way you can actually feel.',
-    tint: 'var(--aura-4)',
-  },
-  {
-    icon: Sparkles,
-    title: 'Build a habit',
-    text: 'A few minutes a day, saved to your library, compounding quietly into real change.',
-    tint: 'var(--aura-3)',
-  },
-];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const STEPS: Array<{ icon: LucideIcon; title: string; text: string }> = [
-  {
-    icon: Play,
-    title: 'Press play',
-    text: 'Pick a session that matches your mood. A free 1-minute preview lets you feel it before you commit.',
-  },
-  {
-    icon: Bookmark,
-    title: 'Save it',
-    text: 'Tap the heart to keep sessions in your library and return to them whenever you need to.',
-  },
-  {
-    icon: MessageCircle,
-    title: 'Reflect',
-    text: 'Leave a note on how a session landed and see what the rest of the community is discovering.',
-  },
-];
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
 
+/** Eyebrow + heading + optional right-hand action, shared by every section. */
 function SectionHeading({
   eyebrow,
   title,
   subtitle,
-  center = true,
+  action,
 }: {
   eyebrow: string;
-  title: React.ReactNode;
+  title: string;
   subtitle?: string;
-  center?: boolean;
+  action?: { href: string; label: string };
 }) {
   return (
-    <div className={center ? 'text-center max-w-2xl mx-auto' : 'max-w-2xl'}>
-      <Reveal>
-        <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full glass-card text-[11px] font-bold uppercase tracking-[0.14em] text-primary mb-4">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="max-w-2xl">
+        <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-primary sm:text-xs">
           {eyebrow}
-        </span>
-      </Reveal>
-      <Reveal delay={0.06}>
-        <h2
-          className="text-3xl md:text-[2.6rem] leading-tight font-black text-foreground text-balance"
-          style={{ fontFamily: 'var(--font-outfit)' }}
-        >
+        </p>
+        <h2 className="mt-2 text-2xl font-black leading-tight text-foreground sm:text-3xl lg:text-4xl">
           {title}
         </h2>
-      </Reveal>
-      {subtitle && (
-        <Reveal delay={0.12}>
-          <p className="text-muted-foreground mt-4 leading-relaxed text-balance">{subtitle}</p>
-        </Reveal>
+        {subtitle && (
+          <p className="mt-2 text-sm leading-relaxed text-foreground/50 sm:text-base">{subtitle}</p>
+        )}
+      </div>
+      {action && (
+        <Link
+          href={action.href}
+          className="press inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-foreground/12 bg-foreground/5 px-4 py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-foreground/10 sm:self-auto sm:text-sm"
+        >
+          {action.label}
+          <ArrowRight className="h-4 w-4" />
+        </Link>
       )}
     </div>
   );
 }
 
-export default async function HomePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ cat?: string }>;
-}) {
-  const { cat } = await searchParams;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+function ListenCard({ platform }: { platform: ResolvedPlatform }) {
+  return (
+    <a
+      href={platform.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group stream-card flex h-full flex-col rounded-2xl p-4 transition-all duration-500 hover:-translate-y-1 hover:border-foreground/20 hover:shadow-[0_24px_60px_-30px_var(--brand)] sm:rounded-[1.4rem] sm:p-5"
+      style={{ '--brand': platform.color } as React.CSSProperties}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-foreground/10 sm:h-12 sm:w-12"
+          style={{ background: `linear-gradient(135deg, ${platform.color}25, transparent)` }}
+        >
+          <svg viewBox="0 0 24 24" fill={platform.color} className="h-6 w-6 sm:h-7 sm:w-7" aria-hidden="true">
+            <path d={platform.path} />
+          </svg>
+        </div>
+        <ExternalLink className="h-4 w-4 shrink-0 text-foreground/40 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+      </div>
+      <h3 className="mt-4 text-sm font-black leading-snug text-foreground sm:text-base">
+        {platform.label}
+      </h3>
+      <p className="mt-1.5 text-xs leading-relaxed text-foreground/55 sm:text-sm">
+        Follow the official feed.
+      </p>
+    </a>
+  );
+}
 
-  let podQuery = supabase
-    .from('tracks')
-    .select(PODCAST_SELECT)
-    .eq('status', 'published')
-    .is('deleted_at', null);
-  if (cat) podQuery = podQuery.eq('category_id', cat);
+function EpisodeCard({ episode, badge }: { episode: DatedEpisode; badge: string }) {
+  return (
+    <article className="group stream-card flex h-full flex-col overflow-hidden rounded-2xl p-3 transition-colors duration-300 hover:border-foreground/20 sm:rounded-[1.6rem] sm:p-4">
+      <Link
+        href={`/podcast/${episode.slug}`}
+        className="relative block aspect-square w-full overflow-hidden rounded-xl border border-foreground/10 sm:rounded-2xl"
+      >
+        {episode.thumbnail_url ? (
+          <Image
+            src={episode.thumbnail_url}
+            alt={episode.title}
+            fill
+            sizes="(max-width: 640px) 45vw, (max-width: 1024px) 45vw, 380px"
+            className="object-cover transition-transform duration-700 group-hover:scale-105"
+          />
+        ) : (
+          <div className="h-full w-full bg-gradient-to-br from-[hsl(var(--aura-1))] to-[hsl(var(--aura-2))]" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+        <span className="absolute bottom-2.5 left-2.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white/95 backdrop-blur-md sm:bottom-3 sm:left-3">
+          {badge}
+        </span>
+      </Link>
 
-  const [{ data: podcasts }, { data: categories }, { count: totalSessions }, { data: playlistRows }] =
-    await Promise.all([
-      podQuery.order('created_at', { ascending: false }).limit(24),
-      supabase
-        .from('categories')
-        .select('id, name, slug, color, icon')
-        .is('deleted_at', null)
-        .order('sort_order')
-        .limit(12),
-      supabase
-        .from('tracks')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'published')
-        .is('deleted_at', null),
-      supabase
-        .from('playlists')
-        .select(PLAYLIST_SELECT)
-        .eq('is_public', true)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .limit(8),
-    ]);
+      <div className="mt-3 flex flex-1 flex-col sm:mt-4">
+        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-foreground/40 sm:text-[11px]">
+          <span className="truncate">{formatDate(episode.created_at)}</span>
+          <span className="h-1 w-1 shrink-0 rounded-full bg-foreground/25" />
+          <span className="shrink-0 tabular-nums">{formatDuration(episode.duration_seconds)}</span>
+        </div>
 
-  const list = (podcasts ?? []) as unknown as CardPodcast[];
-  const cats = (categories ?? []) as ChipCategory[];
-  const playlists = (playlistRows ?? []) as PlaylistSummary[];
+        <h3 className="mt-1.5 text-sm font-black leading-snug text-foreground transition-colors group-hover:text-primary sm:text-base lg:text-lg">
+          <Link href={`/podcast/${episode.slug}`}>{episode.title}</Link>
+        </h3>
+        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-foreground/50 sm:text-sm">
+          {episode.short_description || 'A calming guided meditation session.'}
+        </p>
+
+        <Link
+          href={`/podcast/${episode.slug}`}
+          aria-label={`Play ${episode.title}`}
+          className="press mt-4 inline-flex w-fit items-center gap-2 rounded-full bg-foreground/8 py-1.5 pl-1.5 pr-4 text-xs font-bold text-foreground transition-colors hover:bg-primary"
+        >
+          <span className="grid h-7 w-7 place-items-center rounded-full bg-primary text-white transition-colors group-hover:bg-white group-hover:text-primary">
+            <Play className="ml-0.5 h-3 w-3" fill="currentColor" />
+          </span>
+          Play
+        </Link>
+      </div>
+    </article>
+  );
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const show = await getShow();
+
+  return pageMetadata({
+    title: 'The Mindset Meditation | Guided Meditation, Sleep Music & Mindfulness Podcast',
+    absoluteTitle: true,
+    description: SEO_DESCRIPTION,
+    descriptionMax: 320,
+    path: '/',
+    image: show.coverUrl,
+    index: true,
+    keywords: [
+      'meditation podcast',
+      'guided meditation',
+      'sleep music',
+      'mindfulness podcast',
+      'official podcast website',
+      'meditation episodes',
+    ],
+  });
+}
+
+export default async function HomePage() {
+  const supabase = createPublicClient();
+
+  const [show, { data: latestRows }] = await Promise.all([
+    getShow(),
+    supabase
+      .from('tracks')
+      .select(PODCAST_SELECT)
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(6),
+  ]);
+
+  const latestEpisodes = (latestRows ?? []) as DatedEpisode[];
+  // With nothing published the page still has to look finished, so it falls
+  // back to demo cards — but the hero player is told it cannot stream them.
+  const hasLiveEpisodes = latestEpisodes.length > 0;
+  const episodesToShow = hasLiveEpisodes ? latestEpisodes : DEMO_EPISODES;
+  const heroEpisode = episodesToShow[0];
+  const platforms = HARDCODED_PLATFORMS;
+
+  const heroTrack: EpisodeSummary = {
+    id: heroEpisode.id,
+    title: heroEpisode.title,
+    slug: heroEpisode.slug,
+    thumbnail_url: heroEpisode.thumbnail_url,
+    short_description: heroEpisode.short_description,
+    duration_seconds: heroEpisode.duration_seconds,
+    instructor_name: heroEpisode.instructor_name,
+  };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="stream-shell flex min-h-screen flex-col">
       <JsonLd
         data={[
-          faqLd(FAQS),
+          organizationLd(platforms),
+          webSiteLd(),
+          podcastSeriesLd({
+            name: show.name,
+            description: show.description,
+            coverUrl: show.coverUrl,
+            platforms,
+            episodes: episodesToShow.map((episode) => ({
+              title: episode.title,
+              slug: episode.slug,
+            })),
+          }),
           breadcrumbLd([{ name: 'Home', path: '/' }]),
-          ...(list.length
-            ? [
-                itemListLd(
-                  list.slice(0, 12).map((p) => ({ name: p.title, path: `/podcast/${p.slug}` })),
-                  'Latest meditation sessions',
-                ),
-              ]
+          ...(platforms.length
+            ? [siteNavigationLd(platforms.map((p) => ({ name: p.label, url: p.url })))]
             : []),
         ]}
       />
+
       <Navbar />
-      <main className="flex-1">
-        <Hero sessionCount={totalSessions ?? list.length} categoryCount={cats.length} />
 
-        <Marquee />
+      {/* The global player docks to the bottom edge, so the last section needs
+          room to clear it on phones where it is full-width. */}
+      <main className="flex-1 pb-28 sm:pb-32">
+        {/* ============================ HERO ============================ */}
+        <section
+          id="home"
+          className="relative overflow-hidden px-4 pb-12 pt-24 sm:px-6 sm:pb-16 sm:pt-32 lg:px-8 lg:pb-20 lg:pt-36"
+        >
+          <div
+            className="pointer-events-none absolute -left-32 -top-32 h-[26rem] w-[26rem] rounded-full bg-primary/15 blur-[130px] sm:h-[38rem] sm:w-[38rem] sm:blur-[150px]"
+            aria-hidden
+          />
+          <div
+            className="pointer-events-none absolute -right-24 top-24 h-[22rem] w-[22rem] rounded-full bg-[hsl(var(--aura-4)/0.14)] blur-[120px] sm:h-[32rem] sm:w-[32rem] sm:blur-[130px]"
+            aria-hidden
+          />
 
-        {/* Benefits */}
-        <section className="relative px-4 md:px-8 py-24 max-w-7xl mx-auto">
-          <div className="absolute inset-0 dot-grid pointer-events-none" aria-hidden />
-          <div className="relative">
-            <SectionHeading
-              eyebrow="Why it works"
-              title={
-                <>
-                  A quieter mind is a <span className="text-gradient">practice</span>, not a
-                  personality
-                </>
-              }
-              subtitle="A few minutes of guided audio a day changes how your mind feels. Here's what listeners get out of it."
-            />
+          <div className="relative z-10 mx-auto w-full max-w-7xl">
+            <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_minmax(0,25rem)] lg:gap-12 xl:gap-16">
+              {/* --- Copy ---
+                  Second on phones: the player is the thing people came for, so
+                  it leads and the pitch follows. On lg the two sit side by side
+                  and reading order returns to left-then-right. */}
+              <Reveal className="order-2 min-w-0 lg:order-1">
+                <div className="mx-auto max-w-2xl text-center lg:mx-0 lg:text-left">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-foreground/10 bg-foreground/5 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-foreground/55">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                    Welcome to
+                  </span>
 
-            <RevealGroup className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-14">
-              {BENEFITS.map((b) => (
-                <RevealItem key={b.title}>
-                  <div className="gradient-ring lift glass-card rounded-2xl p-6 h-full">
-                    <div
-                      className="w-12 h-12 rounded-2xl grid place-items-center mb-5 text-white"
-                      style={{
-                        background: `linear-gradient(135deg, hsl(${b.tint}) 0%, hsl(${b.tint} / 0.55) 100%)`,
-                        boxShadow: `0 12px 30px -12px hsl(${b.tint} / 0.8)`,
-                      }}
+                  <h1 className="mt-4 text-[2.25rem] font-black leading-[1.05] tracking-tight text-foreground xs:text-5xl sm:text-6xl lg:text-[4.25rem]">
+                    The Mindset{' '}
+                    <span className="bg-gradient-to-r from-fuchsia-600 via-violet-600 to-indigo-600 bg-clip-text text-transparent dark:from-pink-300 dark:via-purple-300 dark:to-indigo-300">
+                      Meditation
+                    </span>
+                  </h1>
+
+                  <p className="mt-4 text-base font-bold text-foreground/65 sm:text-lg lg:text-xl">
+                    Guided Meditation, Sleep Music &amp; Mindfulness Podcast
+                  </p>
+                  <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-foreground/45 sm:text-base lg:mx-0">
+                    Your daily space to relax, heal, and transform your mind. Listen free on our
+                    website or on your favorite podcast platform.
+                  </p>
+
+                  <div className="mt-7 flex flex-col gap-3 xs:flex-row xs:justify-center lg:justify-start">
+                    <Link
+                      href={hasLiveEpisodes ? `/podcast/${heroEpisode.slug}` : '/playlists'}
+                      className="shine press inline-flex items-center justify-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-white shadow-[0_12px_30px_rgba(147,51,234,0.32)] transition-colors hover:bg-primary/90"
                     >
-                      <b.icon className="w-5 h-5" />
-                    </div>
-                    <h3 className="font-bold text-foreground mb-2 text-lg">{b.title}</h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed">{b.text}</p>
+                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/20">
+                        <Play className="ml-0.5 h-2.5 w-2.5" fill="currentColor" />
+                      </span>
+                      Listen on Website
+                    </Link>
+                    <Link
+                      href="#about"
+                      className="press inline-flex items-center justify-center gap-2 rounded-full border border-foreground/12 bg-foreground/5 px-6 py-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-foreground/10"
+                    >
+                      Learn More
+                      <ArrowRight className="h-4 w-4 rotate-90 text-foreground/60" />
+                    </Link>
                   </div>
+
+                  {/* Four promises. A 2×2 grid on phones — the old single row
+                      scrolled horizontally and clipped the last two mid-word. */}
+                  <ul className="mt-9 grid grid-cols-2 gap-x-4 gap-y-5 border-t border-foreground/8 pt-7 text-left sm:grid-cols-4 sm:gap-x-5">
+                    {HERO_PROOF.map(({ icon: Icon, label, detail }) => (
+                      <li key={label} className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Icon className="h-4 w-4 shrink-0 text-primary" />
+                          <span className="truncate text-xs font-bold text-foreground/85 sm:text-[13px]">
+                            {label}
+                          </span>
+                        </div>
+                        <p className="mt-1 pl-6 text-[11px] text-foreground/40">{detail}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </Reveal>
+
+              {/* --- Now playing --- */}
+              <Reveal direction="scale" className="order-1 min-w-0 lg:order-2">
+                <div className="mx-auto w-full max-w-[24rem] lg:mx-0 lg:ml-auto lg:max-w-none">
+                  <NowPlayingCard
+                    track={heroTrack}
+                    queue={hasLiveEpisodes ? latestEpisodes : []}
+                    showName={show.name}
+                    cover="/hero-top.png"
+                    playable={hasLiveEpisodes}
+                  />
+                </div>
+              </Reveal>
+            </div>
+          </div>
+        </section>
+
+        {/* ======================= LISTEN ANYWHERE ======================= */}
+        <section
+          id="listen-anywhere"
+          className="relative overflow-hidden px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20"
+        >
+          <div
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/8 blur-[140px] sm:h-[38rem] sm:w-[38rem] sm:blur-[160px]"
+            aria-hidden
+          />
+
+          <div className="relative z-10 mx-auto max-w-7xl">
+            <Reveal>
+              <SectionHeading
+                eyebrow="Listen Anywhere"
+                title="Choose your favorite platform."
+                subtitle="The same episodes, wherever you already listen."
+              />
+            </Reveal>
+
+            <RevealGroup
+              stagger={0.06}
+              className={`mt-7 grid grid-cols-2 gap-3 sm:gap-4 lg:mt-9 ${
+                platforms.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-5'
+              }`}
+            >
+              {platforms.map((platform) => (
+                <RevealItem key={platform.id} className="h-full">
+                  <ListenCard platform={platform} />
                 </RevealItem>
               ))}
             </RevealGroup>
           </div>
         </section>
 
-        {/* Playlists */}
-        {playlists.length > 0 && (
-          <section className="px-4 md:px-8 py-12 max-w-7xl mx-auto">
-            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
+        {/* ========================== EPISODES ========================== */}
+        <section
+          id="episodes"
+          className="relative overflow-hidden px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20"
+        >
+          <div
+            className="pointer-events-none absolute -left-24 top-1/3 h-[24rem] w-[24rem] rounded-full bg-[hsl(var(--aura-2)/0.12)] blur-[130px] sm:h-[32rem] sm:w-[32rem] sm:blur-[140px]"
+            aria-hidden
+          />
+
+          <div className="relative z-10 mx-auto max-w-7xl">
+            <Reveal>
               <SectionHeading
-                center={false}
-                eyebrow="Follow a series"
-                title={
-                  <>
-                    Curated <span className="text-gradient">playlists</span>
-                  </>
-                }
-                subtitle="Sessions grouped into series you can work through start to finish."
+                eyebrow="Fresh This Week"
+                title="Latest Episodes"
+                subtitle="New meditation sessions for your mind, body and soul."
+                action={{ href: '/playlists', label: 'View all' }}
               />
-              <Reveal delay={0.1}>
-                <Link
-                  href="/playlists"
-                  className="group inline-flex items-center gap-2 text-sm font-semibold text-primary hover:gap-3 transition-all duration-300"
-                >
-                  See all playlists
-                  <ArrowRight className="w-4 h-4" />
-                </Link>
-              </Reveal>
-            </div>
+            </Reveal>
+
+            {/* Phones get a snap carousel rather than a grid: three cards in two
+                columns always leaves a hole, and swiping a shelf of covers is
+                the gesture people already use in every music app. It becomes a
+                plain three-up grid once there is room for one. */}
             <RevealGroup
-              stagger={0.06}
-              className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-5"
+              stagger={0.05}
+              className="scrollbar-hide -mx-4 mt-7 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:gap-5 sm:px-6 lg:mx-0 lg:mt-9 lg:grid lg:grid-cols-3 lg:gap-6 lg:overflow-visible lg:px-0 lg:pb-0"
             >
-              {playlists.map((p) => (
-                <RevealItem key={p.id}>
-                  <PlaylistCard playlist={p} />
+              {episodesToShow.slice(0, 3).map((episode, index) => (
+                <RevealItem
+                  key={episode.id}
+                  className="w-[68vw] max-w-[19rem] shrink-0 snap-start xs:w-[58vw] sm:w-[44vw] lg:w-auto lg:max-w-none"
+                >
+                  <EpisodeCard episode={episode} badge={EPISODE_BADGES[index] ?? 'Meditation'} />
                 </RevealItem>
               ))}
             </RevealGroup>
-          </section>
-        )}
-
-        {/* Sessions */}
-        <section id="sessions" className="px-4 md:px-8 py-16 max-w-7xl mx-auto scroll-mt-20">
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-8">
-            <SectionHeading
-              center={false}
-              eyebrow={user ? 'Your library' : 'Listen now'}
-              title={
-                user ? (
-                  <>
-                    Your <span className="text-gradient">meditations</span>
-                  </>
-                ) : (
-                  <>
-                    Latest <span className="text-gradient">sessions</span>
-                  </>
-                )
-              }
-              subtitle="Filter by what you need right now — sleep, stress, focus, or something in between."
-            />
-            {user && (
-              <Reveal delay={0.1}>
-                <Link
-                  href="/saved"
-                  className="group inline-flex items-center gap-2 text-sm font-semibold text-primary hover:gap-3 transition-all duration-300"
-                >
-                  View saved
-                  <ArrowRight className="w-4 h-4" />
-                </Link>
-              </Reveal>
-            )}
           </div>
+        </section>
 
-          {cats.length > 0 && (
-            <div className="mb-10">
-              <CategoryChips categories={cats} active={cat} />
-            </div>
-          )}
+        {/* ============================ ABOUT ============================ */}
+        <section
+          id="about"
+          className="relative overflow-hidden px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20"
+        >
+          <div
+            className="pointer-events-none absolute bottom-0 right-0 h-[24rem] w-[24rem] rounded-full bg-primary/12 blur-[140px] sm:h-[32rem] sm:w-[32rem] sm:blur-[150px]"
+            aria-hidden
+          />
 
-          {list.length === 0 ? (
+          <div className="relative z-10 mx-auto max-w-7xl">
             <Reveal>
-              <div className="glass-card rounded-3xl p-16 text-center">
-                <div className="w-16 h-16 rounded-3xl bg-primary/15 text-primary grid place-items-center mx-auto mb-5 breathe">
-                  <Sparkles className="w-7 h-7" />
+              <div className="stream-panel overflow-hidden rounded-[1.75rem] p-5 sm:rounded-[2rem] sm:p-8 lg:p-10">
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_1fr] lg:items-center lg:gap-10">
+                  <div className="relative aspect-[16/10] w-full overflow-hidden rounded-2xl border border-foreground/8 bg-black/20 sm:aspect-[2/1] lg:aspect-[4/3]">
+                    <Image
+                      src="/hero-bottom.png"
+                      alt="A person meditating at sunrise"
+                      fill
+                      sizes="(max-width: 1024px) 92vw, 320px"
+                      className="object-cover"
+                    />
+                  </div>
+
+                  <div className="min-w-0 text-center lg:text-left">
+                    <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-primary/30 bg-gradient-to-br from-[hsl(var(--aura-4)/0.22)] to-[hsl(var(--aura-1)/0.3)] shadow-[0_0_50px_hsl(var(--glow)/0.18)] lg:mx-0">
+                      <Flower2 className="h-7 w-7 text-primary" />
+                    </div>
+
+                    <p className="mt-4 text-[10px] font-bold uppercase tracking-[0.24em] text-primary sm:text-xs">
+                      About the Podcast
+                    </p>
+                    <h2 className="mt-2 text-2xl font-black leading-tight text-foreground sm:text-3xl">
+                      Meditation for a Better You
+                    </h2>
+                    <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-foreground/55 sm:text-base lg:mx-0">
+                      The Mindset Meditation Podcast is here to help you relax, improve sleep, reduce
+                      stress and build a mindful life.
+                    </p>
+
+                    <ul className="mt-6 flex flex-col items-center gap-2.5 text-xs text-foreground/50 sm:flex-row sm:flex-wrap sm:justify-center sm:gap-x-6 sm:text-sm lg:justify-start">
+                      {[
+                        'New episodes every week',
+                        'Trusted by thousands of listeners',
+                        'Created with care for your well-being',
+                      ].map((point) => (
+                        <li key={point} className="flex items-center gap-2">
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                          {point}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
-                <p className="text-foreground font-bold text-lg mb-1">
-                  Nothing here yet{cat ? ' in this theme' : ''}
-                </p>
-                <p className="text-muted-foreground text-sm">
-                  New sessions land regularly — check back soon.
-                </p>
               </div>
             </Reveal>
-          ) : (
-            <RevealGroup
-              stagger={0.06}
-              className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-5"
-            >
-              {list.map((p) => (
-                <RevealItem key={p.id}>
-                  <PodcastCard podcast={p} queue={list} />
-                </RevealItem>
-              ))}
-            </RevealGroup>
-          )}
-        </section>
-
-        {/* How it works */}
-        <section className="px-4 md:px-8 py-20 max-w-7xl mx-auto">
-          <SectionHeading
-            eyebrow="How it works"
-            title="Three steps. That's the whole thing."
-          />
-          <RevealGroup
-            stagger={0.12}
-            className="relative grid grid-cols-1 md:grid-cols-3 gap-6 mt-14"
-          >
-            {/* Connector line between the steps on desktop */}
-            <div
-              className="hidden md:block absolute top-[3.25rem] left-[16%] right-[16%] h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent"
-              aria-hidden
-            />
-            {STEPS.map((s, i) => (
-              <RevealItem key={s.title}>
-                <div className="relative gradient-ring lift glass-card rounded-3xl p-8 text-center h-full">
-                  <span className="absolute top-5 right-6 text-5xl font-black text-foreground/[0.06] select-none">
-                    {i + 1}
-                  </span>
-                  <div className="relative w-14 h-14 mx-auto rounded-2xl bg-primary/15 text-primary grid place-items-center mb-5">
-                    <span className="absolute inset-0 rounded-2xl border border-primary/30 pulse-ring" />
-                    <s.icon className="w-6 h-6" />
-                  </div>
-                  <h3 className="font-bold text-foreground mb-2 text-lg">{s.title}</h3>
-                  <p className="text-sm text-muted-foreground leading-relaxed">{s.text}</p>
-                </div>
-              </RevealItem>
-            ))}
-          </RevealGroup>
-        </section>
-
-        {/* FAQ — real search-intent content, and the source of the FAQ schema */}
-        <section className="px-4 md:px-8 py-20 max-w-3xl mx-auto">
-          <SectionHeading
-            eyebrow="Questions"
-            title={
-              <>
-                Meditation, <span className="text-gradient">answered</span>
-              </>
-            }
-            subtitle="The things people ask most before they start a practice."
-          />
-          <RevealGroup stagger={0.07} className="mt-12 space-y-3">
-            {FAQS.map((faq) => (
-              <RevealItem key={faq.question}>
-                <details className="group glass-card rounded-2xl overflow-hidden">
-                  <summary className="flex items-center justify-between gap-4 cursor-pointer list-none p-5 md:p-6">
-                    <h3 className="font-bold text-foreground text-base md:text-lg">
-                      {faq.question}
-                    </h3>
-                    <span className="shrink-0 w-8 h-8 rounded-full grid place-items-center bg-primary/12 text-primary transition-transform duration-300 group-open:rotate-45">
-                      <Plus className="w-4 h-4" />
-                    </span>
-                  </summary>
-                  <p className="px-5 md:px-6 pb-6 -mt-1 text-sm md:text-base text-muted-foreground leading-relaxed">
-                    {faq.answer}
-                  </p>
-                </details>
-              </RevealItem>
-            ))}
-          </RevealGroup>
-        </section>
-
-        {/* Pull quote */}
-        <section className="px-4 md:px-8 py-16 max-w-4xl mx-auto">
-          <Reveal direction="scale">
-            <figure className="relative glass-card rounded-3xl p-10 md:p-14 text-center overflow-hidden">
-              <div
-                className="absolute -top-24 -right-16 w-72 h-72 rounded-full blur-3xl opacity-40 float-slow pointer-events-none"
-                style={{ background: 'radial-gradient(circle, hsl(var(--aura-1)/0.5), transparent 70%)' }}
-                aria-hidden
-              />
-              <Quote className="w-8 h-8 text-primary mx-auto mb-6" />
-              <blockquote
-                className="text-2xl md:text-3xl font-bold text-foreground leading-snug text-balance"
-                style={{ fontFamily: 'var(--font-outfit)' }}
-              >
-                You can't stop the waves, but you can learn to surf.
-              </blockquote>
-              <figcaption className="text-sm text-muted-foreground mt-5">
-                Jon Kabat-Zinn — founder of mindfulness-based stress reduction
-              </figcaption>
-            </figure>
-          </Reveal>
-        </section>
-
-        {/* Closing CTA */}
-        <section className="px-4 md:px-8 pb-24">
-          <Reveal direction="scale">
-            <div className="aurora-bg grain relative overflow-hidden rounded-[2rem] max-w-6xl mx-auto px-6 py-20 text-center">
-              <div className="absolute inset-0 grid place-items-center pointer-events-none" aria-hidden>
-                {[0, 1].map((i) => (
-                  <span
-                    key={`cta-ring-${i}`}
-                    className="absolute rounded-full border border-white/10 pulse-ring"
-                    style={{
-                      width: `${18 + i * 12}rem`,
-                      height: `${18 + i * 12}rem`,
-                      animationDelay: `${i * 1.5}s`,
-                    }}
-                  />
-                ))}
-              </div>
-              <div className="relative z-10 max-w-2xl mx-auto">
-                <h2
-                  className="text-3xl md:text-5xl font-black text-white mb-5 text-balance"
-                  style={{ fontFamily: 'var(--font-outfit)' }}
-                >
-                  Transform your mind,
-                  <br />
-                  <span className="text-gradient">transform your life.</span>
-                </h2>
-                <p className="text-white/70 mb-9 text-lg leading-relaxed text-balance">
-                  Start with one session today. Free to join, no downloads, just press play.
-                </p>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-                  <Link
-                    href={user ? '#sessions' : '/auth/register'}
-                    className="shine press inline-flex items-center gap-2 px-8 py-4 rounded-full bg-white text-[hsl(252,45%,8%)] font-bold glow-primary-lg"
-                  >
-                    {user ? 'Browse sessions' : 'Create free account'}
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
-                  {!user && (
-                    <Link
-                      href="#sessions"
-                      className="press inline-flex items-center gap-2 px-8 py-4 rounded-full glass text-white font-bold hover:bg-white/20 transition-colors"
-                    >
-                      Listen first
-                    </Link>
-                  )}
-                </div>
-              </div>
-            </div>
-          </Reveal>
+          </div>
         </section>
       </main>
+
       <Footer />
       <AudioPlayer />
     </div>
