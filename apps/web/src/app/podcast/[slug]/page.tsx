@@ -22,6 +22,12 @@ import { getShow } from '@/lib/show';
 import { parsePlatformLinks, resolvePlatformLinks } from '@/lib/platforms';
 import { JsonLd, pageMetadata, episodeLd, breadcrumbLd } from '@/lib/seo';
 
+// NOTE: this route deliberately has no loading.tsx. A loading file makes the
+// segment a Suspense boundary, so the response starts streaming with a 200
+// status line before the component runs — and notFound() for an unknown episode
+// slug then renders the 404 page under a 200, a soft 404 that tells crawlers
+// and uptime checks a broken URL succeeded. Losing the skeleton here is the
+// price of a correct status code.
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({
