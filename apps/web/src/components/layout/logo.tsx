@@ -42,11 +42,16 @@ export function Logo({
   stacked?: boolean;
 }) {
   return (
-    <Link href={href} className={cn('group flex items-center gap-2.5', className)}>
+    <Link href={href} className={cn('group flex min-w-0 items-center gap-2.5', className)}>
       <LogoMark className="transition-transform duration-500 group-hover:scale-110 group-hover:rotate-6" />
-      <span className={cn('flex flex-col leading-none', stacked ? '' : 'justify-center')}>
+      <span className={cn('flex min-w-0 flex-col leading-none', stacked ? '' : 'justify-center')}>
         <span
-          className={cn('font-black tracking-tight text-foreground', textClassName ?? 'text-base')}
+          className={cn(
+            // nowrap + truncate rather than wrapping: in a fixed-height navbar
+            // a two-line brand name pushes the row out of alignment.
+            'truncate whitespace-nowrap font-black tracking-tight text-foreground',
+            textClassName ?? 'text-base',
+          )}
           style={{ fontFamily: 'var(--font-outfit)' }}
         >
           The <span className="text-gradient">Mindset</span> Meditation

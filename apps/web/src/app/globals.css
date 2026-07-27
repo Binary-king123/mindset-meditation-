@@ -8,34 +8,44 @@
     --font-inter: 'Inter', sans-serif;
     --font-outfit: 'Outfit', sans-serif;
 
-    /* Light Mode */
-    --background: 250 40% 98%;
-    --foreground: 250 30% 10%;
+    /* Light Mode.
+       Not a neutral grey scale: every step carries the brand violet hue (258),
+       so the light theme reads as the same product in daylight rather than a
+       washed-out copy. `--foreground` is violet-ink rather than black for the
+       same reason — pure #000 on a tinted page looks like a bug. */
+    --background: 258 60% 98%;
+    --foreground: 258 45% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 250 30% 10%;
+    --card-foreground: 258 45% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 250 30% 10%;
-    --primary: 258 85% 62%;
+    --popover-foreground: 258 45% 11%;
+    --primary: 262 88% 58%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 250 20% 94%;
-    --secondary-foreground: 250 30% 20%;
-    --muted: 250 20% 94%;
-    --muted-foreground: 250 10% 45%;
-    --accent: 258 85% 62%;
+    --secondary: 258 40% 94%;
+    --secondary-foreground: 258 40% 22%;
+    --muted: 258 35% 94%;
+    --muted-foreground: 258 18% 42%;
+    --accent: 262 88% 58%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 250 20% 90%;
-    --input: 250 20% 90%;
-    --ring: 258 85% 62%;
+    --border: 258 32% 88%;
+    --input: 258 32% 88%;
+    --ring: 262 88% 58%;
     --radius: 0.875rem;
 
     /* Brand accents — used by gradients, glows and auras */
-    --aura-1: 258 85% 65%; /* violet  */
-    --aura-2: 190 85% 55%; /* cyan    */
-    --aura-3: 165 70% 50%; /* teal    */
-    --aura-4: 320 75% 62%; /* magenta */
-    --glow: 258 85% 62%;
+    --aura-1: 262 90% 64%; /* violet  */
+    --aura-2: 226 85% 62%; /* indigo  */
+    --aura-3: 190 80% 52%; /* cyan    */
+    --aura-4: 300 80% 64%; /* magenta */
+    --glow: 262 88% 58%;
+
+    /* Ink for text sitting ON the violet-tinted panels (hero player, footer).
+       A single pair of tokens means those surfaces don't need a dark: variant
+       on every child — they just flip with the theme. */
+    --panel: 0 0% 100%;
+    --panel-foreground: 258 45% 11%;
 
     /* Charts */
     --chart-1: 258 85% 62%;
@@ -56,31 +66,36 @@
   }
 
   .dark {
-    --background: 252 45% 4%;
-    --foreground: 250 25% 96%;
-    --card: 252 38% 8%;
-    --card-foreground: 250 25% 96%;
-    --popover: 252 38% 8%;
-    --popover-foreground: 250 25% 96%;
-    --primary: 258 90% 70%;
-    --primary-foreground: 252 45% 5%;
-    --secondary: 252 30% 14%;
-    --secondary-foreground: 250 20% 90%;
-    --muted: 252 30% 12%;
-    --muted-foreground: 250 12% 60%;
-    --accent: 258 90% 70%;
-    --accent-foreground: 252 45% 5%;
+    /* Hue pushed from 252 to 258–262 and saturation raised across the ramp:
+       the night theme now reads violet rather than blue-grey. */
+    --background: 258 48% 5%;
+    --foreground: 258 25% 96%;
+    --card: 258 40% 9%;
+    --card-foreground: 258 25% 96%;
+    --popover: 258 40% 9%;
+    --popover-foreground: 258 25% 96%;
+    --primary: 262 92% 70%;
+    --primary-foreground: 258 48% 6%;
+    --secondary: 258 34% 15%;
+    --secondary-foreground: 258 20% 90%;
+    --muted: 258 34% 13%;
+    --muted-foreground: 258 16% 66%;
+    --accent: 262 92% 70%;
+    --accent-foreground: 258 48% 6%;
     --destructive: 0 63% 58%;
     --destructive-foreground: 0 0% 100%;
-    --border: 252 28% 18%;
-    --input: 252 28% 16%;
-    --ring: 258 90% 70%;
+    --border: 258 30% 20%;
+    --input: 258 30% 18%;
+    --ring: 262 92% 70%;
 
-    --aura-1: 258 90% 68%;
-    --aura-2: 190 90% 58%;
-    --aura-3: 165 75% 52%;
-    --aura-4: 320 80% 66%;
-    --glow: 258 90% 68%;
+    --aura-1: 262 92% 70%;
+    --aura-2: 226 90% 66%;
+    --aura-3: 190 85% 56%;
+    --aura-4: 300 82% 68%;
+    --glow: 262 92% 70%;
+
+    --panel: 258 40% 11%;
+    --panel-foreground: 258 25% 96%;
 
     --sidebar-background: 252 55% 3%;
     --sidebar-foreground: 252 30% 90%;
@@ -124,6 +139,22 @@
       radial-gradient(46rem 40rem at 50% 108%, hsl(var(--aura-4) / 0.08), transparent 60%);
   }
 
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.45;
+    /* Foreground-tinted, not white: on the light theme a white grid over a
+       near-white page is simply not there. */
+    background-image:
+      linear-gradient(hsl(var(--foreground) / 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--foreground) / 0.04) 1px, transparent 1px);
+    background-size: 140px 140px;
+    mask-image: radial-gradient(circle at center, black 35%, transparent 85%);
+  }
+
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-outfit);
     @apply font-bold tracking-tight;
@@ -156,35 +187,17 @@
 /* === Utility Classes === */
 @layer utilities {
   /* --- Surfaces --- */
-  .glass {
-    @apply bg-white/10 dark:bg-white/5 backdrop-blur-xl border border-white/20 dark:border-white/10;
-  }
-
   /* A more opaque card needs far less blur to read as glass. backdrop-filter is
      the single most expensive thing on these pages — dozens of cards each
      blurring the layers beneath them — so keep the radius low. */
   .glass-card {
-    background: hsl(var(--card) / 0.86);
-    border: 1px solid hsl(var(--border) / 0.8);
+    /* Nearly opaque so cover art and text inside stay crisp over the coloured
+       hero wash rather than picking up the background tint. */
+    background: hsl(var(--card) / 0.92);
+    border: 1px solid hsl(var(--border) / 0.85);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     box-shadow: 0 1px 0 0 hsl(0 0% 100% / 0.06) inset, 0 8px 30px -12px hsl(252 45% 4% / 0.35);
-  }
-
-  /* Card that lifts and lights up on hover */
-  .lift {
-    transition:
-      transform 0.45s cubic-bezier(0.16, 1, 0.3, 1),
-      box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1),
-      border-color 0.45s ease;
-    will-change: transform;
-  }
-  .lift:hover {
-    transform: translateY(-6px);
-    border-color: hsl(var(--primary) / 0.45);
-    box-shadow:
-      0 24px 60px -20px hsl(var(--glow) / 0.45),
-      0 0 0 1px hsl(var(--primary) / 0.18);
   }
 
   /* Animated conic gradient border, revealed on hover */
@@ -234,7 +247,93 @@
       linear-gradient(160deg, hsl(258 70% 12%) 0%, hsl(252 75% 7%) 45%, hsl(230 70% 9%) 100%);
   }
 
-  /* Fine grain, kills gradient banding and adds texture */
+  /* The three shared surfaces below are written light-first and overridden in
+     .dark, so a component only ever needs the one class — no dark: variant on
+     every card in the app. */
+  .stream-shell {
+    position: relative;
+    background:
+      radial-gradient(circle at top left, hsl(var(--aura-1) / 0.16), transparent 32%),
+      radial-gradient(circle at top right, hsl(var(--aura-2) / 0.12), transparent 28%),
+      radial-gradient(circle at bottom center, hsl(var(--aura-4) / 0.12), transparent 34%),
+      linear-gradient(180deg, hsl(258 60% 98%) 0%, hsl(258 46% 96%) 100%);
+  }
+
+  .dark .stream-shell {
+    background:
+      radial-gradient(circle at top left, hsl(var(--aura-1) / 0.3), transparent 30%),
+      radial-gradient(circle at top right, hsl(var(--aura-2) / 0.2), transparent 26%),
+      radial-gradient(circle at bottom center, hsl(var(--aura-4) / 0.22), transparent 32%),
+      linear-gradient(180deg, hsl(258 48% 8%) 0%, hsl(258 46% 5%) 100%);
+  }
+
+  .stream-shell::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(circle at center, transparent 60%, hsl(var(--aura-1) / 0.08) 100%);
+  }
+
+  .dark .stream-shell::before {
+    background:
+      linear-gradient(180deg, hsl(0 0% 100% / 0.03), transparent 22%),
+      radial-gradient(circle at center, transparent 55%, hsl(258 48% 3% / 0.65) 100%);
+  }
+
+  .stream-panel {
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.9), hsl(258 50% 98% / 0.86));
+    border: 1px solid hsl(var(--border) / 0.9);
+    box-shadow:
+      0 24px 80px -32px hsl(var(--glow) / 0.28),
+      inset 0 1px 0 hsl(0 0% 100% / 0.9);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  .dark .stream-panel {
+    background: linear-gradient(180deg, hsl(258 36% 13% / 0.9), hsl(258 32% 10% / 0.86));
+    border-color: hsl(var(--border) / 0.6);
+    box-shadow:
+      0 24px 80px -32px hsl(var(--glow) / 0.45),
+      inset 0 1px 0 hsl(0 0% 100% / 0.05);
+  }
+
+  .stream-card {
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.92), hsl(258 50% 98% / 0.92));
+    border: 1px solid hsl(var(--border) / 0.9);
+    box-shadow: 0 18px 44px -30px hsl(var(--glow) / 0.4);
+  }
+
+  .dark .stream-card {
+    background: linear-gradient(180deg, hsl(258 32% 14% / 0.92), hsl(258 28% 11% / 0.92));
+    border-color: hsl(var(--border) / 0.6);
+    box-shadow: 0 18px 44px -30px hsl(258 55% 2% / 0.9);
+  }
+
+  /* Surface for the homepage now-playing panel. More opaque than .stream-card
+     so the cover art reads as the brightest thing in the hero. */
+  .now-playing {
+    background: linear-gradient(180deg, hsl(0 0% 100% / 0.96) 0%, hsl(258 55% 97% / 0.98) 100%);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.9),
+      0 30px 90px -30px hsl(var(--glow) / 0.42);
+  }
+
+  .dark .now-playing {
+    background: linear-gradient(180deg, hsl(258 36% 14% / 0.96) 0%, hsl(258 44% 8% / 0.98) 100%);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.07),
+      0 30px 90px -30px hsl(258 60% 2% / 0.9);
+  }
+
+  .violet-glow {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.18),
+      0 18px 60px -26px hsl(var(--glow) / 0.65);
+  }
+
+/* Fine grain, kills gradient banding and adds texture */
   .grain::after {
     content: '';
     position: absolute;
@@ -245,15 +344,7 @@
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
   }
 
-  /* Subtle dotted grid, for section backdrops */
-  .dot-grid {
-    background-image: radial-gradient(hsl(var(--foreground) / 0.09) 1px, transparent 1px);
-    background-size: 22px 22px;
-    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 30%, transparent 75%);
-    mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, #000 30%, transparent 75%);
-  }
-
-  /* --- Glows --- */
+/* --- Glows --- */
   .glow-primary {
     box-shadow: 0 0 28px hsl(var(--glow) / 0.4);
   }
@@ -321,37 +412,12 @@
     animation: float 9s ease-in-out infinite;
   }
 
-  .spin-slow {
-    animation: spin-ring 26s linear infinite;
-  }
-
-  /* Expanding rings, the "breath" motif */
+/* Expanding rings, the "breath" motif */
   .pulse-ring {
     animation: pulse-ring 4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
   }
 
-  /* Twinkling starfield dot. Driven by CSS rather than JS so the hero can
-     render hundreds of them without a motion component each. */
-  .twinkle {
-    opacity: 0;
-    animation: twinkle var(--twinkle-duration, 3s) ease-in-out var(--twinkle-delay, 0s) infinite;
-  }
-
-  /* Infinite horizontal ticker */
-  .marquee-track {
-    display: flex;
-    width: max-content;
-    animation: marquee 38s linear infinite;
-  }
-  .marquee-mask {
-    -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-    mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-  }
-  .marquee-mask:hover .marquee-track {
-    animation-play-state: paused;
-  }
-
-  /* Audio wave */
+.marquee-mask:hover/* Audio wave */
   .audio-wave {
     display: flex;
     align-items: center;
@@ -369,11 +435,7 @@
   .audio-wave-bar:nth-child(4) { animation-delay: 0.36s; }
   .audio-wave-bar:nth-child(5) { animation-delay: 0.48s; }
 
-  .focus-ring {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
-  }
-
-  .scrollbar-hide {
+.scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
@@ -382,15 +444,111 @@
   }
 }
 
+/* === Seek slider ===
+   A real <input type="range"> rather than a click-handled <div>, so it is
+   keyboard- and screen-reader-operable for free. The filled portion is painted
+   on the track from the --seek custom property the component sets. Plain CSS,
+   not @layer utilities: the vendor pseudo-elements have to stay unprefixed and
+   each browser drops the whole rule if it does not recognise the selector,
+   which is why the -webkit- and -moz- blocks are written out separately. */
+.seek-range {
+  -webkit-appearance: none;
+  appearance: none;
+  /* Taller than the 4px track: on touch this is the whole grab target. */
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.seek-range:disabled {
+  cursor: default;
+}
+
+.seek-range:focus-visible {
+  outline: none;
+}
+
+.seek-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--foreground) / 0.85) var(--seek, 0%),
+    hsl(var(--foreground) / 0.18) var(--seek, 0%)
+  );
+}
+
+.seek-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: hsl(var(--foreground) / 0.18);
+}
+
+.seek-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background: hsl(var(--foreground) / 0.85);
+}
+
+.seek-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px; /* centres the 12px thumb on the 4px track */
+  border: none;
+  border-radius: 9999px;
+  background: hsl(var(--foreground));
+  box-shadow: 0 0 0 4px hsl(var(--foreground) / 0.14);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.seek-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 9999px;
+  background: hsl(var(--foreground));
+  box-shadow: 0 0 0 4px hsl(var(--foreground) / 0.14);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+/* Spotify only shows the scrub handle once you reach for it. */
+.seek-range:hover::-webkit-slider-thumb,
+.seek-range:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.seek-range:hover::-moz-range-thumb,
+.seek-range:focus-visible::-moz-range-thumb {
+  opacity: 1;
+}
+
+/* No hover on touch, so the handle has to be permanently visible there. */
+@media (pointer: coarse) {
+  .seek-range:not(:disabled)::-webkit-slider-thumb {
+    opacity: 1;
+  }
+  .seek-range:not(:disabled)::-moz-range-thumb {
+    opacity: 1;
+  }
+}
+
+.seek-range:focus-visible::-webkit-slider-runnable-track {
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.9);
+}
+
+.seek-range:focus-visible::-moz-range-track {
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.9);
+}
+
 /* === Keyframes === */
 @keyframes wave-bounce {
   0%, 100% { height: 7px; }
   50% { height: 22px; }
-}
-
-@keyframes aurora {
-  0%, 100% { background-position: 0% 50%, 100% 50%, 50% 100%, 0 0; }
-  50%      { background-position: 100% 50%, 0% 50%, 50% 0%, 0 0; }
 }
 
 @keyframes gradient-pan {
@@ -416,16 +574,6 @@
   0%   { transform: scale(0.85); opacity: 0.6; }
   70%  { transform: scale(1.45); opacity: 0; }
   100% { transform: scale(1.45); opacity: 0; }
-}
-
-@keyframes twinkle {
-  0%, 100% { opacity: 0; }
-  50%      { opacity: 0.9; }
-}
-
-@keyframes marquee {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
 }
 
 @keyframes shimmer {

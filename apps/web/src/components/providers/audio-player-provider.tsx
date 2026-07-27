@@ -25,6 +25,8 @@ interface AudioPlayerContextValue {
   toggleShuffle: () => void;
   setSleepTimer: (minutes: number | null) => void;
   addToQueue: (track: Track) => void;
+  /** Stop playback and dismiss the player entirely. */
+  close: () => void;
 }
 
 const AudioPlayerContext = createContext<AudioPlayerContextValue | null>(null);
@@ -320,6 +322,20 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     [store],
   );
 
+  const close = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      // Reporting before the src is dropped, so the final position is recorded.
+      reportProgress(audio.currentTime, true);
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    store.setIsPlaying(false);
+    store.clearQueue(); // also clears currentTrack, which hides the player
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+  }, [store, reportProgress]);
+
   // Sleep timer effect
   useEffect(() => {
     if (!store.sleepTimerEndsAt) return;
@@ -352,6 +368,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         toggleShuffle,
         setSleepTimer,
         addToQueue,
+        close,
       }}
     >
       {children}

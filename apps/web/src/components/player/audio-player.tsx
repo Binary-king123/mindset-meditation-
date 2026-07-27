@@ -5,10 +5,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import {
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX,
-  Repeat, Shuffle, List, Timer, ChevronDown, Gauge
+  Repeat, Shuffle, List, Timer, ChevronDown, Gauge, X, Heart
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { usePlayerStore } from '@/store/player.store';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
+import { toggleSave } from '@/app/actions';
 import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
 
@@ -24,8 +26,10 @@ const SLEEP_TIMER_OPTIONS = [5, 10, 15, 30, 45, 60];
 
 export function AudioPlayer() {
   const store = usePlayerStore();
-  const { pause, resume, skipNext, skipPrev, seek, setVolume, toggleMute, setPlaybackSpeed, toggleRepeat, toggleShuffle, setSleepTimer } = useAudioPlayer();
+  const { pause, resume, skipNext, skipPrev, seek, setVolume, toggleMute, setPlaybackSpeed, toggleRepeat, toggleShuffle, setSleepTimer, close } = useAudioPlayer();
   const [expanded, setExpanded] = useState(false);
+  // Optimistic like state, keyed to the current track so it resets on change.
+  const [likedId, setLikedId] = useState<string | null>(null);
   const [showQueue, setShowQueue] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showSleepMenu, setShowSleepMenu] = useState(false);
@@ -50,11 +54,27 @@ export function AudioPlayer() {
     [setVolume],
   );
 
+  const toggleLike = useCallback(async () => {
+    const id = usePlayerStore.getState().currentTrack?.id;
+    if (!id) return;
+    // Optimistic flip; revert on error.
+    setLikedId((prev) => (prev === id ? null : id));
+    const res = await toggleSave(id);
+    if ('error' in res && res.error) {
+      setLikedId((prev) => (prev === id ? null : id));
+      toast.error(res.error === 'Please sign in' ? 'Sign in to save episodes' : res.error);
+    } else if ('saved' in res) {
+      setLikedId(res.saved ? id : null);
+      toast.success(res.saved ? 'Saved to your library' : 'Removed from your library');
+    }
+  }, []);
+
   // Safe to bail out now that all hooks have run.
   if (!store.currentTrack) return null;
 
   const track = store.currentTrack;
   const progress = store.duration > 0 ? (store.currentTime / store.duration) * 100 : 0;
+  const liked = likedId === track.id;
 
   return (
     <>
@@ -78,11 +98,11 @@ export function AudioPlayer() {
           'fixed z-50 transition-all duration-500',
           expanded
             ? 'inset-x-0 bottom-0 rounded-t-3xl'
-            : 'bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-[480px] rounded-2xl'
+            : 'bottom-0 left-0 right-0 md:bottom-4 md:left-4 md:right-4 md:w-auto md:max-w-4xl md:mx-auto rounded-t-2xl md:rounded-2xl'
         )}
         style={{
           background:
-            'linear-gradient(135deg, hsl(252 42% 9% / 0.94) 0%, hsl(252 55% 5% / 0.96) 100%)',
+            'linear-gradient(135deg, hsl(var(--card) / 0.94) 0%, hsl(var(--background) / 0.97) 100%)',
           backdropFilter: 'blur(24px) saturate(150%)',
           WebkitBackdropFilter: 'blur(24px) saturate(150%)',
           border: '1px solid hsl(var(--glow) / 0.28)',
@@ -122,19 +142,34 @@ export function AudioPlayer() {
               onClick={() => setExpanded(true)}
               aria-label={`Expand player: ${track.title}`}
             >
-              <span className="block text-white font-bold text-sm truncate">{track.title}</span>
-              <span className="block text-white/50 text-xs truncate">
+              <span className="block text-foreground font-bold text-sm truncate">{track.title}</span>
+              <span className="block text-foreground/50 text-xs truncate">
                 {track.instructor_name ?? BRAND.shortName}
               </span>
             </button>
 
             {/* Controls */}
             <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Like — hidden on the narrowest screens to keep the bar tidy */}
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.9 }}
+                onClick={toggleLike}
+                className={cn(
+                  'hidden sm:flex p-2 transition-colors',
+                  liked ? 'text-[hsl(var(--aura-4))]' : 'text-foreground/60 hover:text-foreground',
+                )}
+                aria-label={liked ? 'Remove from library' : 'Save to library'}
+                aria-pressed={liked}
+              >
+                <Heart className="w-4 h-4" fill={liked ? 'currentColor' : 'none'} />
+              </motion.button>
+
               <motion.button
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipPrev}
-                className="p-2 text-white/70 hover:text-white transition-colors"
+                className="p-2 text-foreground/70 hover:text-foreground transition-colors"
                 aria-label="Previous"
               >
                 <SkipBack className="w-4 h-4" fill="currentColor" />
@@ -160,15 +195,26 @@ export function AudioPlayer() {
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipNext}
-                className="p-2 text-white/70 hover:text-white transition-colors"
+                className="p-2 text-foreground/70 hover:text-foreground transition-colors"
                 aria-label="Next"
               >
                 <SkipForward className="w-4 h-4" fill="currentColor" />
               </motion.button>
+
+              {/* Cancel — stop and dismiss the player */}
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.9 }}
+                onClick={close}
+                className="p-2 text-foreground/60 hover:text-foreground transition-colors"
+                aria-label="Close player"
+              >
+                <X className="w-4 h-4" />
+              </motion.button>
             </div>
 
             {/* Progress bar */}
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/10 rounded-b-2xl">
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-foreground/10 rounded-b-2xl">
               <div
                 className="h-full bg-primary rounded-b-2xl transition-all duration-300"
                 style={{ width: `${progress}%` }}
@@ -186,21 +232,33 @@ export function AudioPlayer() {
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={() => setExpanded(false)}
-                className="p-2 text-white/60 hover:text-white transition-colors"
+                className="p-2 text-foreground/60 hover:text-foreground transition-colors"
               >
                 <ChevronDown className="w-6 h-6" />
               </motion.button>
               <div className="text-center">
-                <p className="text-white/50 text-xs font-semibold uppercase tracking-widest">Now Playing</p>
+                <p className="text-foreground/50 text-xs font-semibold uppercase tracking-widest">Now Playing</p>
               </div>
-              <motion.button
-                type="button"
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setShowQueue(!showQueue)}
-                className={cn('p-2 transition-colors', showQueue ? 'text-primary' : 'text-white/60 hover:text-white')}
-              >
-                <List className="w-6 h-6" />
-              </motion.button>
+              <div className="flex items-center gap-1">
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.9 }}
+                  onClick={() => setShowQueue(!showQueue)}
+                  className={cn('p-2 transition-colors', showQueue ? 'text-primary' : 'text-foreground/60 hover:text-foreground')}
+                  aria-label="Queue"
+                >
+                  <List className="w-6 h-6" />
+                </motion.button>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.9 }}
+                  onClick={close}
+                  className="p-2 text-foreground/60 hover:text-foreground transition-colors"
+                  aria-label="Close player"
+                >
+                  <X className="w-6 h-6" />
+                </motion.button>
+              </div>
             </div>
 
             {/* Artwork */}
@@ -226,22 +284,14 @@ export function AudioPlayer() {
 
             {/* Track Info */}
             <div className="text-center mb-6">
-              <h2 className="text-2xl font-black text-white mb-1">{track.title}</h2>
-              <p className="text-white/50">{track.instructor_name ?? BRAND.shortName}</p>
-              {(track as any).category && (
-                <span
-                  className="inline-block mt-2 text-xs font-semibold px-3 py-1 rounded-full"
-                  style={{ background: `${(track as any).category?.color ?? '#4a56ff'}33`, color: (track as any).category?.color ?? '#4a56ff' }}
-                >
-                  {(track as any).category?.icon} {(track as any).category?.name}
-                </span>
-              )}
+              <h2 className="text-2xl font-black text-foreground mb-1">{track.title}</h2>
+              <p className="text-foreground/50">{track.instructor_name ?? BRAND.shortName}</p>
             </div>
 
             {/* Progress Bar */}
             <div className="mb-4">
               <div
-                className="h-2 bg-white/10 rounded-full cursor-pointer group relative"
+                className="h-2 bg-foreground/10 rounded-full cursor-pointer group relative"
                 onClick={handleSeek}
                 onKeyDown={(e) => {
                   // Arrow keys nudge by 5s so the bar is usable without a mouse.
@@ -259,10 +309,10 @@ export function AudioPlayer() {
                   className="h-full bg-primary rounded-full transition-all duration-100 relative"
                   style={{ width: `${progress}%` }}
                 >
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-2" />
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 bg-foreground rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-2" />
                 </div>
               </div>
-              <div className="flex justify-between text-xs text-white/40 mt-2">
+              <div className="flex justify-between text-xs text-foreground/40 mt-2">
                 <span>{formatTime(store.currentTime)}</span>
                 <span>{formatTime(store.duration)}</span>
               </div>
@@ -274,7 +324,7 @@ export function AudioPlayer() {
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleShuffle}
-                className={cn('p-2 transition-colors', store.isShuffle ? 'text-primary' : 'text-white/50 hover:text-white')}
+                className={cn('p-2 transition-colors', store.isShuffle ? 'text-primary' : 'text-foreground/50 hover:text-foreground')}
                 aria-label="Shuffle"
               >
                 <Shuffle className="w-5 h-5" />
@@ -284,7 +334,7 @@ export function AudioPlayer() {
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipPrev}
-                className="p-3 text-white/70 hover:text-white transition-colors"
+                className="p-3 text-foreground/70 hover:text-foreground transition-colors"
               >
                 <SkipBack className="w-7 h-7" fill="currentColor" />
               </motion.button>
@@ -308,7 +358,7 @@ export function AudioPlayer() {
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={skipNext}
-                className="p-3 text-white/70 hover:text-white transition-colors"
+                className="p-3 text-foreground/70 hover:text-foreground transition-colors"
               >
                 <SkipForward className="w-7 h-7" fill="currentColor" />
               </motion.button>
@@ -317,7 +367,7 @@ export function AudioPlayer() {
                 type="button"
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleRepeat}
-                className={cn('p-2 transition-colors', store.isRepeat ? 'text-primary' : 'text-white/50 hover:text-white')}
+                className={cn('p-2 transition-colors', store.isRepeat ? 'text-primary' : 'text-foreground/50 hover:text-foreground')}
                 aria-label="Repeat"
               >
                 <Repeat className="w-5 h-5" />
@@ -328,7 +378,7 @@ export function AudioPlayer() {
             <div className="flex items-center justify-between mb-4">
               {/* Volume */}
               <div className="flex items-center gap-2 flex-1">
-                <button type="button" onClick={toggleMute} className="text-white/50 hover:text-white transition-colors">
+                <button type="button" onClick={toggleMute} className="text-foreground/50 hover:text-foreground transition-colors">
                   {store.isMuted || store.volume === 0 ? (
                     <VolumeX className="w-4 h-4" />
                   ) : (
@@ -353,7 +403,7 @@ export function AudioPlayer() {
                   <button
                     type="button"
                     onClick={() => { setShowSpeedMenu(!showSpeedMenu); setShowSleepMenu(false); }}
-                    className={cn('flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg transition-colors', showSpeedMenu ? 'text-primary bg-primary/10' : 'text-white/50 hover:text-white')}
+                    className={cn('flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg transition-colors', showSpeedMenu ? 'text-primary bg-primary/10' : 'text-foreground/50 hover:text-foreground')}
                   >
                     <Gauge className="w-3 h-3" />
                     {store.playbackSpeed}x
@@ -389,7 +439,7 @@ export function AudioPlayer() {
                   <button
                     type="button"
                     onClick={() => { setShowSleepMenu(!showSleepMenu); setShowSpeedMenu(false); }}
-                    className={cn('flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg transition-colors', (showSleepMenu || store.sleepTimerEndsAt) ? 'text-primary bg-primary/10' : 'text-white/50 hover:text-white')}
+                    className={cn('flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-lg transition-colors', (showSleepMenu || store.sleepTimerEndsAt) ? 'text-primary bg-primary/10' : 'text-foreground/50 hover:text-foreground')}
                   >
                     <Timer className="w-3 h-3" />
                     {store.sleepTimerEndsAt
@@ -438,13 +488,13 @@ export function AudioPlayer() {
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="border-t border-white/10 pt-4 mt-4"
+                  className="border-t border-foreground/10 pt-4 mt-4"
                 >
-                  <p className="text-white/50 text-xs font-semibold uppercase tracking-widest mb-3">Up Next</p>
+                  <p className="text-foreground/50 text-xs font-semibold uppercase tracking-widest mb-3">Up Next</p>
                   <div className="space-y-2 max-h-48 overflow-y-auto scrollbar-hide">
                     {store.queue.slice(store.queueIndex + 1, store.queueIndex + 6).map((t, i) => (
-                      <div key={t.id} className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors">
-                        <span className="text-white/30 text-xs w-4 text-right">{i + 1}</span>
+                      <div key={t.id} className="flex items-center gap-3 p-2 rounded-xl hover:bg-foreground/5 transition-colors">
+                        <span className="text-foreground/30 text-xs w-4 text-right">{i + 1}</span>
                         <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0">
                           {t.thumbnail_url ? (
                             <Image src={t.thumbnail_url} alt={t.title} width={32} height={32} className="w-full h-full object-cover" />
@@ -453,10 +503,10 @@ export function AudioPlayer() {
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-white text-xs font-medium truncate">{t.title}</p>
-                          <p className="text-white/40 text-xs truncate">{t.instructor_name}</p>
+                          <p className="text-foreground text-xs font-medium truncate">{t.title}</p>
+                          <p className="text-foreground/40 text-xs truncate">{t.instructor_name}</p>
                         </div>
-                        <span className="text-white/30 text-xs">{formatTime(t.duration_seconds)}</span>
+                        <span className="text-foreground/30 text-xs">{formatTime(t.duration_seconds)}</span>
                       </div>
                     ))}
                   </div>

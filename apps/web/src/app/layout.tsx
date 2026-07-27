@@ -5,7 +5,6 @@ import { AuthProvider } from '@/components/providers/auth-provider';
 import { AudioPlayerProvider } from '@/components/providers/audio-player-provider';
 import { Toaster } from 'sonner';
 import { BRAND } from '@/lib/brand';
-import { JsonLd, organizationLd, webSiteLd } from '@/lib/seo';
 import './globals.css';
 
 const inter = Inter({
@@ -24,63 +23,35 @@ const APP_NAME = BRAND.name;
 const APP_DESCRIPTION = BRAND.description;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://themindsetmeditation.app';
 
-// Front-loads the primary keyword ("Guided Meditation") ahead of the brand,
-// which is what actually gets matched in search results, and stays under the
-// ~60 characters Google renders before truncating.
-const DEFAULT_TITLE = 'Guided Meditation for Sleep, Stress & Focus';
-
 export const metadata: Metadata = {
   metadataBase: new URL(APP_URL),
   title: {
-    default: `${DEFAULT_TITLE} | ${APP_NAME}`,
+    default: `${APP_NAME} | Guided Meditation & Mindfulness Podcast`,
     template: `%s | ${APP_NAME}`,
   },
   description: APP_DESCRIPTION,
   applicationName: APP_NAME,
-  keywords: [
-    'guided meditation',
-    'meditation app',
-    'sleep meditation',
-    'meditation for anxiety',
-    'stress relief meditation',
-    'mindfulness meditation',
-    'breathwork',
-    'meditation podcast',
-    'free guided meditation',
-    'meditation for focus',
-    'body scan meditation',
-    'morning meditation',
-  ],
   authors: [{ name: APP_NAME, url: APP_URL }],
   creator: APP_NAME,
   publisher: APP_NAME,
   category: 'Health & Wellness',
-  alternates: { canonical: APP_URL },
   formatDetection: { telephone: false, address: false, email: false },
-  robots: {
-    index: true,
-    follow: true,
-    googleBot: {
-      index: true,
-      follow: true,
-      'max-video-preview': -1,
-      'max-image-preview': 'large',
-      'max-snippet': -1,
-    },
-  },
+  // De-indexed by DEFAULT. Search should only ever surface the homepage, so
+  // `/` opts itself back in (see app/page.tsx) and every other route — current
+  // or future — inherits noindex without anyone having to remember to add it.
+  // `follow: true` keeps link equity flowing through to the homepage.
+  //
+  // Note this is deliberately NOT paired with a robots.txt Disallow: a
+  // disallowed page can't be crawled, so Google would never read the noindex
+  // and stale URLs would linger in the index. See app/robots.ts.
+  robots: { index: false, follow: true },
   openGraph: {
     type: 'website',
     locale: 'en_US',
     url: APP_URL,
     siteName: APP_NAME,
-    title: `${DEFAULT_TITLE} | ${APP_NAME}`,
-    description: APP_DESCRIPTION,
   },
-  twitter: {
-    card: 'summary_large_image',
-    title: `${DEFAULT_TITLE} | ${APP_NAME}`,
-    description: APP_DESCRIPTION,
-  },
+  twitter: { card: 'summary_large_image' },
 };
 
 export const viewport: Viewport = {
@@ -103,15 +74,17 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href={process.env.NEXT_PUBLIC_SUPABASE_URL} crossOrigin="" />
         <link rel="dns-prefetch" href={process.env.NEXT_PUBLIC_SUPABASE_URL} />
-        {/* Site-wide identity graph; pages add their own page-level schema. */}
-        <JsonLd data={[organizationLd(), webSiteLd()]} />
+        {/* Organization / WebSite / PodcastSeries schema is emitted by the
+            homepage rather than here: it needs the show record from the
+            database, and reading that in the root layout would make every page
+            in the app dynamic. */}
       </head>
       <body>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange={false}>
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange={false}>
           <AuthProvider>
             <AudioPlayerProvider>
               {children}
-              <Toaster position="bottom-right" theme="dark" richColors closeButton />
+              <Toaster position="bottom-right" theme="system" richColors closeButton />
             </AudioPlayerProvider>
           </AuthProvider>
         </ThemeProvider>
