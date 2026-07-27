@@ -12,6 +12,9 @@
 // Credentials are passed in, never stored: they live only as a hash inside
 // Supabase Auth. Nothing to leak from .env or from the repo.
 //
+// Re-running it on an existing account RESETS that account's password, so this
+// is also the way back in if the admin password is lost.
+//
 //   pnpm seed:admin -- --email you@example.com --password 'S3cret!'
 //   pnpm seed:admin                      # prompts for anything omitted
 import { loadEnv } from './_env.mjs';
@@ -111,10 +114,23 @@ async function findUser(targetEmail) {
 }
 
 async function main() {
-  // 1) Create or reuse the auth user.
+  // 1) Create the auth user, or reset the password of the existing one.
+  //
+  // Resetting matters: this script used to skip the password entirely when the
+  // account already existed, so re-running it to "change the admin password"
+  // silently did nothing and left you locked out with the old one.
   let user = await findUser(email);
   if (user) {
-    console.log(`↺ admin auth user already exists: ${email} (${user.id})`);
+    const res = await gotrue(`/auth/v1/admin/users/${user.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ password, email_confirm: true }),
+    });
+    if (!res.ok) {
+      console.error('❌ failed to reset the admin password:', res.status, res.json);
+      process.exit(1);
+    }
+    console.log(`↺ admin auth user already existed: ${email} (${user.id})`);
+    console.log('✅ password reset to the one you just entered');
   } else {
     const res = await gotrue('/auth/v1/admin/users', {
       method: 'POST',

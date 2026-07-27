@@ -14,10 +14,16 @@ import type { NextConfig } from 'next';
  */
 function loadRootEnv() {
   const root = path.join(__dirname, '..', '..');
+  // Keys this loader has set, so a real environment variable still wins but a
+  // later line in the file can correct an earlier one.
+  const fromFile = new Set<string>();
+
   // .env.local wins over .env, matching Next's own precedence.
   for (const name of ['.env.local', '.env']) {
     const file = path.join(root, name);
     if (!fs.existsSync(file)) continue;
+    const seen = new Set<string>();
+
     for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
@@ -31,7 +37,25 @@ function loadRootEnv() {
       ) {
         value = value.slice(1, -1);
       }
-      if (process.env[key] === undefined) process.env[key] = value;
+
+      if (seen.has(key)) {
+        // Duplicates are almost always a mistake — a key appended to the file
+        // when a blank one already existed higher up. Silently keeping the
+        // first made R2 look "not configured" with correct credentials sitting
+        // ten lines below.
+        console.warn(`[env] ${name}: "${key}" is defined more than once; using the last non-empty value.`);
+      }
+      seen.add(key);
+
+      // A real environment variable (systemd, Docker -e, hosting panel) always
+      // wins over the file.
+      const setByEnvironment = process.env[key] !== undefined && !fromFile.has(key);
+      if (setByEnvironment) continue;
+      // Never let a blank line erase a value already found.
+      if (value === '' && process.env[key]) continue;
+
+      process.env[key] = value;
+      fromFile.add(key);
     }
   }
 }
@@ -83,12 +107,25 @@ const nextConfig: NextConfig = {
 
   experimental: {
     serverActions: { bodySizeLimit: '2mb' },
+    // lucide-react and framer-motion are barrel packages: a single named import
+    // pulls the whole module graph into the client bundle. Rewriting them to
+    // per-file imports cuts a large amount of JavaScript off every page, which
+    // is the bulk of the "clicking feels slow" problem.
+    optimizePackageImports: ['lucide-react', 'framer-motion'],
   },
 
   images: {
-    // Covers are public Supabase Storage URLs.
-    remotePatterns: [{ protocol: 'https', hostname: '*.supabase.co' }],
+    remotePatterns: [
+      // Covers and podcast artwork in public Supabase Storage.
+      { protocol: 'https', hostname: '*.supabase.co' },
+      // Cloudflare R2 public bucket / custom domain, when one is configured.
+      { protocol: 'https', hostname: '*.r2.dev' },
+      { protocol: 'https', hostname: '*.r2.cloudflarestorage.com' },
+    ],
     formats: ['image/avif', 'image/webp'],
+    // Artwork is immutable once uploaded (keys are content-addressed by
+    // timestamp), so the optimizer can hold onto it.
+    minimumCacheTTL: 60 * 60 * 24 * 30,
   },
 
   async headers() {
@@ -117,7 +154,12 @@ const nextConfig: NextConfig = {
   },
 
   async redirects() {
-    return [{ source: '/home', destination: '/', permanent: true }];
+    return [
+      { source: '/home', destination: '/', permanent: true },
+      // The homepage anchor was renamed when the site became podcast-first.
+      // Kept so older links and shares still land somewhere real.
+      { source: '/sessions', destination: '/#episodes', permanent: true },
+    ];
   },
 };
 
