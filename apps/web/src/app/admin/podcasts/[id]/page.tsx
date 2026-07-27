@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { EditForm } from '@/components/admin/edit-form';
-import type { CategoryOption, PlaylistOption } from '@/components/admin/upload-form';
+import type { PlaylistOption } from '@/components/admin/upload-form';
 import { createClient } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -11,16 +11,15 @@ export default async function EditPodcastPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: track }, { data: categories }, { data: playlists }, { data: membership }] =
+  const [{ data: track }, { data: playlists }, { data: membership }] =
     await Promise.all([
       supabase
         .from('tracks')
         .select(
-          'id, title, slug, description, instructor_name, category_id, duration_seconds, thumbnail_url, audio_path, status',
+          'id, title, slug, description, instructor_name, duration_seconds, thumbnail_url, audio_path, status, platform_links',
         )
         .eq('id', id)
         .maybeSingle(),
-      supabase.from('categories').select('id, name, icon').is('deleted_at', null).order('sort_order'),
       supabase
         .from('playlists')
         .select('id, title')
@@ -34,7 +33,7 @@ export default async function EditPodcastPage({ params }: { params: Promise<{ id
   return (
     <div>
       <Link
-        href="/admin/podcasts"
+        href="/admin"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6 group"
       >
         <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-1" />
@@ -50,7 +49,6 @@ export default async function EditPodcastPage({ params }: { params: Promise<{ id
         // biome-ignore lint/suspicious/noExplicitAny: untyped podcast schema row
         track={track as any}
         currentPlaylistId={(membership as { playlist_id?: string } | null)?.playlist_id ?? ''}
-        categories={(categories ?? []) as CategoryOption[]}
         playlists={(playlists ?? []) as PlaylistOption[]}
       />
     </div>

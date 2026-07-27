@@ -1,25 +1,25 @@
-import {
-  UploadForm,
-  type PlaylistOption,
-  type CategoryOption,
-} from '@/components/admin/upload-form';
+import { UploadForm, type PlaylistOption } from '@/components/admin/upload-form';
 import { Cloud, AlertTriangle } from 'lucide-react';
 import { createClient } from '@/lib/supabase/server';
 import { audioBackend } from '@/lib/audio-storage';
 
 export const dynamic = 'force-dynamic';
 
-export default async function UploadPage() {
+export default async function UploadPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ playlist?: string }>;
+}) {
+  const params = await searchParams;
+  const defaultPlaylistId = params.playlist;
+
   const supabase = await createClient();
 
-  const [{ data: categories }, { data: playlists }] = await Promise.all([
-    supabase.from('categories').select('id, name, icon').is('deleted_at', null).order('sort_order'),
-    supabase
-      .from('playlists')
-      .select('id, title')
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false }),
-  ]);
+  const { data: playlists } = await supabase
+    .from('playlists')
+    .select('id, title')
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
 
   const backend = audioBackend();
 
@@ -64,8 +64,8 @@ export default async function UploadPage() {
         </p>
       </div>
       <UploadForm
-        categories={(categories ?? []) as CategoryOption[]}
         playlists={(playlists ?? []) as PlaylistOption[]}
+        defaultPlaylistId={defaultPlaylistId}
       />
     </div>
   );

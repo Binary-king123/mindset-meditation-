@@ -1,86 +1,52 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import {
-  Upload,
-  ListMusic,
-  ArrowLeft,
-  LayoutDashboard,
-  MessageCircle,
-  BarChart3,
-} from 'lucide-react';
-import { cookies } from 'next/headers';
-import { createClient } from '@/lib/supabase/server';
+import { Upload, ListMusic, ArrowLeft, MessageCircle, BarChart3, Link2 } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
-import { ADMIN_COOKIE, adminIsVerified } from '@/lib/admin-verify';
+import { checkAdmin } from '@/lib/admin-guard';
 
 export const dynamic = 'force-dynamic';
 
+const NAV = [
+  { href: '/admin/playlists', label: 'Manage', icon: ListMusic },
+  { href: '/admin/upload', label: 'Upload', icon: Upload },
+  { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/admin/comments', label: 'Comments', icon: MessageCircle },
+  { href: '/admin/links', label: 'Links', icon: Link2 },
+];
+
 export default async function AdminLayout({ children }: { children: ReactNode }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect('/auth/login?redirect=/admin');
-
-  const { data: role } = await supabase.rpc('get_user_role', { p_user_id: user.id });
-  if (role !== 'admin' && role !== 'super_admin') redirect('/');
-
-  // Second factor. Verified here rather than in middleware: the HMAC key is a
-  // non-public env var, which Next does not expose to the Edge runtime.
-  const store = await cookies();
-  const verified = await adminIsVerified(store.get(ADMIN_COOKIE)?.value, user.id);
-  if (!verified) redirect('/auth/verify?redirect=/admin');
+  const admin = await checkAdmin();
+  if (!admin.ok) {
+    if (admin.reason === 'unauthenticated') redirect('/auth/login?redirect=/admin');
+    if (admin.reason === 'forbidden') redirect('/');
+    redirect('/auth/verify?redirect=/admin');
+  }
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-background/80 backdrop-blur-xl sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link href="/admin" className="font-black text-lg whitespace-nowrap">
+    <div className="min-h-screen stream-shell">
+      <header className="border-b border-white/10 bg-[hsl(252,38%,7%,0.92)] backdrop-blur-xl sticky top-0 z-40">
+        <div className="max-w-6xl mx-auto px-4 min-h-20 py-3 flex flex-col gap-4 md:h-20 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-6 overflow-x-auto">
+            <Link href="/admin" className="font-black text-lg whitespace-nowrap text-white">
               {BRAND.shortName} <span className="text-primary">admin</span>
             </Link>
-            <nav className="flex items-center gap-1">
-              <Link
-                href="/admin"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50"
-              >
-                <LayoutDashboard className="w-4 h-4" />
-                Dashboard
-              </Link>
-              <Link
-                href="/admin/upload"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50"
-              >
-                <Upload className="w-4 h-4" />
-                Upload
-              </Link>
-              <Link
-                href="/admin/podcasts"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50"
-              >
-                <ListMusic className="w-4 h-4" />
-                Manage
-              </Link>
-              <Link
-                href="/admin/analytics"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50"
-              >
-                <BarChart3 className="w-4 h-4" />
-                Analytics
-              </Link>
-              <Link
-                href="/admin/comments"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50"
-              >
-                <MessageCircle className="w-4 h-4" />
-                Comments
-              </Link>
+            <nav className="flex items-center gap-2">
+              {NAV.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm font-medium text-white/65 hover:text-white hover:bg-white/5 whitespace-nowrap"
+                >
+                  <item.icon className="w-4 h-4" />
+                  {item.label}
+                </Link>
+              ))}
             </nav>
           </div>
           <Link
             href="/"
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-1.5 text-sm text-white/65 hover:text-white"
           >
             <ArrowLeft className="w-4 h-4" />
             Back to site

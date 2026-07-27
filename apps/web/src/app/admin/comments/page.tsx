@@ -1,5 +1,11 @@
 import { CommentModeration, type ModRow } from '@/components/admin/comment-moderation';
 import { createClient } from '@/lib/supabase/server';
+import { commentAuthorName, type CommentRow } from '@/lib/comments';
+
+/** The moderation query also embeds the episode each comment belongs to. */
+type ModCommentRow = CommentRow & {
+  track?: { id: string; title: string; slug: string } | null;
+};
 
 export const dynamic = 'force-dynamic';
 
@@ -16,13 +22,12 @@ export default async function AdminCommentsPage() {
     .order('created_at', { ascending: false })
     .limit(300);
 
-  const rows: ModRow[] = ((data ?? []) as Array<Record<string, any>>).map((c) => ({
+  const rows: ModRow[] = ((data ?? []) as unknown as ModCommentRow[]).map((c) => ({
     id: c.id,
     body: c.body,
     created_at: c.created_at,
     parent_id: c.parent_id ?? null,
-    author:
-      c.author?.full_name || c.author?.username || c.author?.email?.split('@')[0] || 'Listener',
+    author: commentAuthorName(c.author),
     trackId: c.track?.id ?? '',
     trackTitle: c.track?.title ?? 'Unknown episode',
     trackSlug: c.track?.slug ?? '',

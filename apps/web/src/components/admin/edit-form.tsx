@@ -4,22 +4,24 @@ import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
-import { Loader2, Music, Image as ImageIcon, Save, ListMusic, Tag, Info } from 'lucide-react';
+import { Loader2, Music, Image as ImageIcon, Save, ListMusic, Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
-import { adminUpdatePodcast, adminCreatePlaylist, adminCreateCategory } from '@/app/actions';
-import { BUCKETS, formatDuration } from '@/lib/podcast';
+import { adminUpdatePodcast, adminCreatePlaylist } from '@/app/actions';
+import { formatDuration } from '@/lib/podcast';
 import {
   INPUT,
   ChipPicker,
   Field,
   FileInput,
-  randomPath,
   readDuration,
-  uploadWithProgress,
-  type CategoryOption,
+  uploadAudio,
+  uploadCover,
+  accessToken,
   type PlaylistOption,
 } from '@/components/admin/upload-form';
+import { PlatformLinkFields } from '@/components/admin/platform-link-fields';
+import { parsePlatformLinks, type PlatformLinks } from '@/lib/platforms';
 
 interface EditableTrack {
   id: string;
@@ -27,22 +29,20 @@ interface EditableTrack {
   slug: string;
   description: string | null;
   instructor_name: string | null;
-  category_id: string | null;
   duration_seconds: number;
   thumbnail_url: string | null;
   audio_path: string | null;
   status: string;
+  platform_links?: unknown;
 }
 
 export function EditForm({
   track,
   currentPlaylistId,
-  categories: initialCategories,
   playlists: initialPlaylists,
 }: {
   track: EditableTrack;
   currentPlaylistId: string;
-  categories: CategoryOption[];
   playlists: PlaylistOption[];
 }) {
   const router = useRouter();
@@ -51,8 +51,6 @@ export function EditForm({
   const [title, setTitle] = useState(track.title);
   const [channel, setChannel] = useState(track.instructor_name ?? '');
   const [description, setDescription] = useState(track.description ?? '');
-  const [categories, setCategories] = useState(initialCategories);
-  const [categoryId, setCategoryId] = useState(track.category_id ?? '');
   const [playlists, setPlaylists] = useState(initialPlaylists);
   const [playlistId, setPlaylistId] = useState(currentPlaylistId);
   const [audio, setAudio] = useState<File | null>(null);
@@ -60,18 +58,9 @@ export function EditForm({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [pct, setPct] = useState(0);
-
-  async function createCategory(name: string) {
-    const res = await adminCreateCategory({ name });
-    if ('error' in res && res.error) {
-      toast.error(res.error);
-      throw new Error(res.error);
-    }
-    const created = res.category as CategoryOption;
-    setCategories((prev) => [...prev, created]);
-    setCategoryId(created.id);
-    toast.success(`Category "${created.name}" created`);
-  }
+  const [platformLinks, setPlatformLinks] = useState<PlatformLinks>(() =>
+    parsePlatformLinks(track.platform_links),
+  );
 
   async function createPlaylist(name: string) {
     const res = await adminCreatePlaylist({ title: name });
@@ -95,65 +84,19 @@ export function EditForm({
     setBusy(true);
     setPct(0);
     try {
-      let audioPath: string | null = null;
-      let durationSeconds: number | null = null;
-
-      // Only touch storage when a replacement file was picked.
-      if (audio) {
-        setProgress('Reading audio…');
-        durationSeconds = await readDuration(audio);
-
-        setProgress('Preparing upload…');
-        const presignRes = await fetch('/api/admin/upload-url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: audio.name, contentType: audio.type || 'audio/mpeg' }),
-        });
-        const presign = await presignRes.json();
-        if (!presignRes.ok) throw new Error(presign.error || 'Could not start upload');
-
-        const contentType = audio.type || 'audio/mpeg';
-        if (presign.backend === 'r2') {
-          setProgress('Uploading audio to Cloudflare R2…');
-          await uploadWithProgress(presign.url, audio, {
-            method: 'PUT',
-            headers: { 'Content-Type': contentType },
-            onProgress: setPct,
-          });
-        } else {
-          setProgress('Uploading audio…');
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (!session) throw new Error('Session expired — sign in again');
-          await uploadWithProgress(
-            `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${presign.bucket}/${presign.key}`,
-            audio,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${session.access_token}`,
-                'Content-Type': contentType,
-                'x-upsert': 'false',
-              },
+      // Only touch storage when a replacement file was picked. Audio and cover
+      // go up together rather than one after the other.
+      const [durationSeconds, audioPath, coverResult] = await Promise.all([
+        audio ? readDuration(audio) : Promise.resolve(null),
+        audio
+          ? uploadAudio(audio, {
+              supabaseAccessToken: () => accessToken(supabase),
+              onStatus: setProgress,
               onProgress: setPct,
-            },
-          );
-        }
-        audioPath = presign.audioPath as string;
-      }
-
-      let coverUrl: string | null = null;
-      let coverPath: string | null = null;
-      if (cover) {
-        setProgress('Uploading cover…');
-        coverPath = randomPath('covers', cover.name);
-        const up = await supabase.storage
-          .from(BUCKETS.thumbnails)
-          .upload(coverPath, cover, { contentType: cover.type || 'image/jpeg', upsert: false });
-        if (up.error) throw new Error(up.error.message);
-        coverUrl = supabase.storage.from(BUCKETS.thumbnails).getPublicUrl(coverPath).data.publicUrl;
-      }
+            })
+          : Promise.resolve(null),
+        uploadCover(supabase, cover),
+      ]);
 
       setProgress('Saving…');
       const res = await adminUpdatePodcast({
@@ -161,12 +104,12 @@ export function EditForm({
         title,
         channel,
         description,
-        categoryId: categoryId || null,
         playlistId: playlistId || null,
         audioPath,
         durationSeconds,
-        coverUrl,
-        coverPath,
+        coverUrl: coverResult.url,
+        coverPath: coverResult.path,
+        platformLinks,
       });
       if ('error' in res && res.error) throw new Error(res.error);
       if ('warning' in res && res.warning) toast.warning(res.warning);
@@ -200,18 +143,6 @@ export function EditForm({
           className={INPUT}
         />
       </Field>
-
-      <ChipPicker
-        label="Category"
-        items={categories.map((c) => ({ id: c.id, label: c.name, icon: c.icon }))}
-        value={categoryId}
-        onChange={setCategoryId}
-        onCreate={createCategory}
-        placeholder="e.g. Evening Wind-Down"
-        hint="No categories yet — create the first one."
-        icon={<Tag className="w-3.5 h-3.5" />}
-        allowNone
-      />
 
       <ChipPicker
         label="Playlist"
@@ -268,6 +199,16 @@ export function EditForm({
           hint="Pick a file only if you want to swap the cover"
         />
       </Field>
+
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-foreground mb-1">Platform links for this episode</h2>
+        <p className="text-xs text-muted-foreground mb-4">
+          Optional. Leave a field empty and this episode uses the show-wide link from{' '}
+          <span className="text-foreground font-medium">Podcast settings</span>. Fill one in to send
+          listeners to this specific episode on that platform instead.
+        </p>
+        <PlatformLinkFields value={platformLinks} onChange={setPlatformLinks} />
+      </div>
 
       {progress && (
         <div className="space-y-2">

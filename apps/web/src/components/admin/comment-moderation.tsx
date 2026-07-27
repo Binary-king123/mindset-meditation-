@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Trash2, Send, CornerDownRight, ExternalLink, MessageCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { addComment, deleteComment } from '@/app/actions';
-import { buildThreads, formatCommentDate, removeWithReplies } from '@/lib/comments';
+import { buildThreads, formatCommentDate, removeWithReplies, commentAuthorName, type CommentRow } from '@/lib/comments';
 
 export interface ModRow {
   id: string;
@@ -37,14 +37,14 @@ export function CommentModeration({ rows }: { rows: ModRow[] }) {
         toast.error(res.error);
         return;
       }
-      const c = res.comment as Record<string, any>;
+      const c = res.comment as CommentRow;
       setItems((prev) => [
         {
           id: c.id,
           body: c.body,
           created_at: c.created_at,
           parent_id: root.id,
-          author: c.author,
+          author: commentAuthorName(c.author),
           trackId: root.trackId,
           trackTitle: root.trackTitle,
           trackSlug: root.trackSlug,

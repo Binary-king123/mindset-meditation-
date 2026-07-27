@@ -13,13 +13,14 @@ import {
   ListMusic,
   X,
   Check,
-  Tag,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { createClient } from '@/lib/supabase/client';
-import { adminCreatePodcast, adminCreatePlaylist, adminCreateCategory } from '@/app/actions';
+import { createClient, type PodcastClient } from '@/lib/supabase/client';
+import { adminCreatePodcast, adminCreatePlaylist } from '@/app/actions';
 import { BUCKETS } from '@/lib/podcast';
 import { cn } from '@/lib/utils';
+import { PlatformLinkFields } from '@/components/admin/platform-link-fields';
+import type { PlatformLinks } from '@/lib/platforms';
 
 export const INPUT =
   'w-full px-4 py-3 bg-input border border-border rounded-xl text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-all';
@@ -28,12 +29,6 @@ export interface PlaylistOption {
   id: string;
   title: string;
 }
-export interface CategoryOption {
-  id: string;
-  name: string;
-  icon?: string | null;
-}
-
 export function randomPath(prefix: string, name: string) {
   const ext = name.split('.').pop() || 'bin';
   return `${prefix}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
@@ -56,27 +51,227 @@ export function readDuration(file: File): Promise<number> {
   });
 }
 
-/** PUT/POST a file with real progress. fetch() can't report upload progress. */
+/**
+ * PUT/POST a blob with real progress. fetch() can't report upload progress.
+ *
+ * Resolves with the response ETag, which multipart uploads need in order to
+ * assemble the finished object. Reading it requires the bucket's CORS policy to
+ * list ETag under ExposeHeaders — see SETUP.md.
+ *
+ * `onProgress` reports bytes rather than a percentage so callers running
+ * several parts at once can sum them.
+ */
 export function uploadWithProgress(
   url: string,
-  file: File,
-  opts: { method: 'PUT' | 'POST'; headers: Record<string, string>; onProgress: (pct: number) => void },
-): Promise<void> {
+  body: Blob,
+  opts: {
+    method: 'PUT' | 'POST';
+    headers: Record<string, string>;
+    onProgress: (loadedBytes: number) => void;
+  },
+): Promise<{ etag: string | null }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(opts.method, url);
     for (const [k, v] of Object.entries(opts.headers)) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) opts.onProgress(Math.round((e.loaded / e.total) * 100));
+      if (e.lengthComputable) opts.onProgress(e.loaded);
     };
     xhr.onload = () =>
       xhr.status >= 200 && xhr.status < 300
-        ? resolve()
+        ? resolve({ etag: xhr.getResponseHeader('ETag') })
         : reject(new Error(`Upload failed (${xhr.status}) ${xhr.responseText.slice(0, 140)}`));
     xhr.onerror = () =>
       reject(new Error('Network error during upload — check the storage bucket CORS settings'));
-    xhr.send(file);
+    xhr.send(body);
   });
+}
+
+/** How many parts are in flight at once. Past this, they just contend. */
+const PART_CONCURRENCY = 5;
+const PART_RETRIES = 2;
+
+/**
+ * Uploads `file` in parallel chunks against pre-signed part URLs.
+ *
+ * This is the difference between one TCP stream doing all the work and five
+ * saturating the connection — on a typical link a 100 MB episode goes from
+ * minutes to well under one. A part that fails is retried on its own rather
+ * than restarting the whole upload.
+ */
+async function uploadParts(
+  file: File,
+  partUrls: string[],
+  partSize: number,
+  onProgress: (pct: number) => void,
+): Promise<Array<{ partNumber: number; etag: string }>> {
+  const loaded = new Array<number>(partUrls.length).fill(0);
+  const report = () => {
+    const total = loaded.reduce((a, b) => a + b, 0);
+    onProgress(Math.min(100, Math.round((total / file.size) * 100)));
+  };
+
+  const results: Array<{ partNumber: number; etag: string }> = [];
+  let next = 0;
+
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= partUrls.length) return;
+
+      const chunk = file.slice(index * partSize, Math.min((index + 1) * partSize, file.size));
+
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const { etag } = await uploadWithProgress(partUrls[index], chunk, {
+            method: 'PUT',
+            // Content-Type is fixed by the signature; setting it per part would
+            // invalidate it.
+            headers: {},
+            onProgress: (bytes) => {
+              loaded[index] = bytes;
+              report();
+            },
+          });
+          if (!etag) {
+            throw new Error(
+              'The storage bucket did not expose the ETag header — add "ETag" to its CORS ExposeHeaders',
+            );
+          }
+          results.push({ partNumber: index + 1, etag });
+          loaded[index] = chunk.size;
+          report();
+          return;
+        } catch (err) {
+          if (attempt >= PART_RETRIES) throw err;
+          loaded[index] = 0;
+          await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+        }
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(PART_CONCURRENCY, partUrls.length) }, () => worker()),
+  );
+
+  return results;
+}
+
+/** The signed-in admin's token, for uploads that go straight to Supabase. */
+export async function accessToken(supabase: PodcastClient): Promise<string> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) throw new Error('Session expired — sign in again');
+  return session.access_token;
+}
+
+/**
+ * Puts a cover image in the public thumbnails bucket. Returns nulls when there
+ * is no file, so callers can pass the result straight through to the action.
+ */
+export async function uploadCover(
+  supabase: PodcastClient,
+  file: File | null,
+  prefix = 'covers',
+): Promise<{ url: string | null; path: string | null }> {
+  if (!file) return { url: null, path: null };
+
+  const path = randomPath(prefix, file.name);
+  const { error } = await supabase.storage
+    .from(BUCKETS.thumbnails)
+    .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false });
+  if (error) throw new Error(error.message);
+
+  return {
+    url: supabase.storage.from(BUCKETS.thumbnails).getPublicUrl(path).data.publicUrl,
+    path,
+  };
+}
+
+/**
+ * Uploads the audio file and returns the stored audio_path, choosing between
+ * multipart R2, single-PUT R2 and Supabase Storage based on what the server
+ * says it wants. Shared by the create and edit forms.
+ */
+export async function uploadAudio(
+  file: File,
+  opts: {
+    supabaseAccessToken: () => Promise<string>;
+    onStatus: (message: string) => void;
+    onProgress: (pct: number) => void;
+  },
+): Promise<string> {
+  const contentType = file.type || 'audio/mpeg';
+
+  opts.onStatus('Preparing upload…');
+  const presignRes = await fetch('/api/admin/upload-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name, contentType, size: file.size }),
+  });
+  const presign = await presignRes.json();
+  if (!presignRes.ok) throw new Error(presign.error || 'Could not start upload');
+
+  if (presign.backend === 'r2' && presign.mode === 'multipart') {
+    opts.onStatus('Uploading to Cloudflare R2 (parallel)…');
+    try {
+      const parts = await uploadParts(file, presign.partUrls, presign.partSize, opts.onProgress);
+      opts.onStatus('Finalising upload…');
+      const done = await fetch('/api/admin/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'complete',
+          key: presign.key,
+          uploadId: presign.uploadId,
+          parts,
+        }),
+      });
+      const result = await done.json();
+      if (!done.ok) throw new Error(result.error || 'Could not finalise the upload');
+      return result.audioPath as string;
+    } catch (err) {
+      // Leaving the upload open would keep R2 billing for the orphaned parts.
+      await fetch('/api/admin/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'abort', key: presign.key, uploadId: presign.uploadId }),
+      }).catch(() => {});
+      throw err;
+    }
+  }
+
+  const toPct = (bytes: number) => opts.onProgress(Math.round((bytes / file.size) * 100));
+
+  if (presign.backend === 'r2') {
+    opts.onStatus('Uploading audio to Cloudflare R2…');
+    await uploadWithProgress(presign.url, file, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      onProgress: toPct,
+    });
+    return presign.audioPath as string;
+  }
+
+  // Supabase Storage: upload with the admin's own session (RLS allows it).
+  opts.onStatus('Uploading audio…');
+  const token = await opts.supabaseAccessToken();
+  await uploadWithProgress(
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${presign.bucket}/${presign.key}`,
+    file,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': contentType,
+        'x-upsert': 'false',
+      },
+      onProgress: toPct,
+    },
+  );
+  return presign.audioPath as string;
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
@@ -288,27 +483,30 @@ export function ChipPicker({
 }
 
 export function UploadForm({
-  categories: initialCategories,
   playlists: initialPlaylists,
+  defaultPlaylistId,
 }: {
-  categories: CategoryOption[];
   playlists: PlaylistOption[];
+  defaultPlaylistId?: string;
 }) {
   const router = useRouter();
   const supabase = createClient();
   const [title, setTitle] = useState('');
   const [channel, setChannel] = useState('');
   const [description, setDescription] = useState('');
-  const [categories, setCategories] = useState<CategoryOption[]>(initialCategories);
-  const [categoryId, setCategoryId] = useState(initialCategories[0]?.id ?? '');
   const [playlists, setPlaylists] = useState<PlaylistOption[]>(initialPlaylists);
-  const [playlistId, setPlaylistId] = useState(initialPlaylists[0]?.id ?? '');
+  const [playlistId, setPlaylistId] = useState(
+    defaultPlaylistId && initialPlaylists.some((p) => p.id === defaultPlaylistId)
+      ? defaultPlaylistId
+      : initialPlaylists[0]?.id ?? '',
+  );
   const [audio, setAudio] = useState<File | null>(null);
   const [cover, setCover] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [pct, setPct] = useState(0);
   const [done, setDone] = useState<string | null>(null);
+  const [platformLinks, setPlatformLinks] = useState<PlatformLinks>({});
 
   function reset() {
     setDone(null);
@@ -317,19 +515,8 @@ export function UploadForm({
     setDescription('');
     setAudio(null);
     setCover(null);
+    setPlatformLinks({});
     setPct(0);
-  }
-
-  async function createCategory(name: string) {
-    const res = await adminCreateCategory({ name });
-    if ('error' in res && res.error) {
-      toast.error(res.error);
-      throw new Error(res.error);
-    }
-    const created = res.category as CategoryOption;
-    setCategories((prev) => [...prev, created]);
-    setCategoryId(created.id);
-    toast.success(`Category "${created.name}" created`);
   }
 
   async function createPlaylist(name: string) {
@@ -365,73 +552,28 @@ export function UploadForm({
       setProgress('Reading audio…');
       const duration = await readDuration(audio);
 
-      setProgress('Preparing upload…');
-      const presignRes = await fetch('/api/admin/upload-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: audio.name, contentType: audio.type || 'audio/mpeg' }),
-      });
-      const presign = await presignRes.json();
-      if (!presignRes.ok) throw new Error(presign.error || 'Could not start upload');
-
-      const contentType = audio.type || 'audio/mpeg';
-
-      if (presign.backend === 'r2') {
-        setProgress('Uploading audio to Cloudflare R2…');
-        await uploadWithProgress(presign.url, audio, {
-          method: 'PUT',
-          headers: { 'Content-Type': contentType },
+      // The cover is small and goes to a different bucket, so there is no
+      // reason to make it wait for the audio the way it used to.
+      const [audioPath, coverResult] = await Promise.all([
+        uploadAudio(audio, {
+          supabaseAccessToken: () => accessToken(supabase),
+          onStatus: setProgress,
           onProgress: setPct,
-        });
-      } else {
-        // Supabase Storage: upload with the admin's own session (RLS allows it).
-        setProgress('Uploading audio…');
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) throw new Error('Session expired — sign in again');
-
-        const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
-        await uploadWithProgress(
-          `${base}/storage/v1/object/${presign.bucket}/${presign.key}`,
-          audio,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-              'Content-Type': contentType,
-              'x-upsert': 'false',
-            },
-            onProgress: setPct,
-          },
-        );
-      }
-
-      const audioPath = presign.audioPath as string;
-
-      let coverUrl: string | null = null;
-      let coverPath: string | null = null;
-      if (cover) {
-        setProgress('Uploading cover…');
-        coverPath = randomPath('covers', cover.name);
-        const up2 = await supabase.storage
-          .from(BUCKETS.thumbnails)
-          .upload(coverPath, cover, { contentType: cover.type || 'image/jpeg', upsert: false });
-        if (up2.error) throw new Error(up2.error.message);
-        coverUrl = supabase.storage.from(BUCKETS.thumbnails).getPublicUrl(coverPath).data.publicUrl;
-      }
+        }),
+        uploadCover(supabase, cover),
+      ]);
 
       setProgress('Saving…');
       const res = await adminCreatePodcast({
         title,
         channel,
         description,
-        categoryId: categoryId || null,
         playlistId: playlistId || null,
         durationSeconds: duration,
         audioPath,
-        coverUrl,
-        coverPath,
+        coverUrl: coverResult.url,
+        coverPath: coverResult.path,
+        platformLinks,
         publish,
       });
       if ('error' in res && res.error) throw new Error(res.error);
@@ -507,18 +649,6 @@ export function UploadForm({
       </Field>
 
       <ChipPicker
-        label="Category"
-        items={categories.map((c) => ({ id: c.id, label: c.name, icon: c.icon }))}
-        value={categoryId}
-        onChange={setCategoryId}
-        onCreate={createCategory}
-        placeholder="e.g. Evening Wind-Down"
-        hint="No categories yet — create the first one."
-        icon={<Tag className="w-3.5 h-3.5" />}
-        allowNone
-      />
-
-      <ChipPicker
         label="Playlist"
         required
         items={playlists.map((p) => ({ id: p.id, label: p.title }))}
@@ -549,6 +679,16 @@ export function UploadForm({
           hint="JPG / PNG / WebP, up to 5MB"
         />
       </Field>
+
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-foreground mb-1">Links for this episode</h2>
+        <p className="text-xs text-muted-foreground mb-4">
+          Optional. Paste the direct URL for this episode on each app — listeners get those
+          buttons under the audio. Leave a field empty and it falls back to the show-wide link
+          from <span className="text-foreground font-medium">Links</span>.
+        </p>
+        <PlatformLinkFields value={platformLinks} onChange={setPlatformLinks} />
+      </div>
 
       {progress && (
         <div className="space-y-2">
