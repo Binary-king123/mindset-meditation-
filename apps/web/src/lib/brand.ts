@@ -6,6 +6,7 @@ export const BRAND = {
   name: 'The Mindset Meditation',
   shortName: 'Mindset Meditation',
   tagline: 'Transform your mind, transform your life',
-  description:
-    'Guided meditation sessions for sleep, stress, focus, and clarity. Press play, breathe, and build a daily practice that changes how your mind feels.',
+  description: 'Your space for inner peace, better sleep, and a healthier, happier mind.',
+  /** Where footer enquiries are delivered. */
+  contactEmail: 'millionairemindset17@gmail.com',
 } as const;

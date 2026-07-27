@@ -3,17 +3,18 @@
 // pages, which is what search engines penalise.
 import type { Metadata } from 'next';
 import { BRAND } from '@/lib/brand';
+import type { ResolvedPlatform } from '@/lib/platforms';
 
 export const SITE_URL = (
   process.env.NEXT_PUBLIC_APP_URL ?? 'https://themindsetmeditation.app'
 ).replace(/\/$/, '');
 
-export function canonical(path = '/'): string {
+function canonical(path = '/'): string {
   return `${SITE_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 /** Titles read best at 50–60 chars; descriptions at 140–160. */
-export function clampDescription(text: string, max = 158): string {
+function clampDescription(text: string, max = 158): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= max) return clean;
   const cut = clean.slice(0, max);
@@ -30,6 +31,8 @@ export function pageMetadata({
   keywords,
   absoluteTitle,
   noIndex,
+  index,
+  descriptionMax,
 }: {
   title: string;
   description: string;
@@ -42,13 +45,33 @@ export function pageMetadata({
    *  segment with the layout and so never receives the template anyway. */
   absoluteTitle?: boolean;
   noIndex?: boolean;
+  /** Opt this page back INTO the index. The root layout de-indexes the whole
+   *  site by default (see app/layout.tsx), so only `/` sets this. */
+  index?: boolean;
+  /** Raises the description cap for pages with deliberately longer copy. */
+  descriptionMax?: number;
 }): Metadata {
   const url = canonical(path);
-  const desc = clampDescription(description);
+  const desc = clampDescription(description, descriptionMax);
   const images = image ? [{ url: image, width: 1200, height: 630, alt: title }] : undefined;
 
   return {
     title: absoluteTitle ? { absolute: title } : title,
+    ...(index
+      ? {
+          robots: {
+            index: true,
+            follow: true,
+            googleBot: {
+              index: true,
+              follow: true,
+              'max-video-preview': -1,
+              'max-image-preview': 'large',
+              'max-snippet': -1,
+            },
+          },
+        }
+      : {}),
     ...(noIndex ? { robots: { index: false, follow: true } } : {}),
     description: desc,
     keywords,
@@ -76,7 +99,7 @@ export function pageMetadata({
 // JSON-LD builders
 // ---------------------------------------------------------------------------
 
-export function organizationLd() {
+export function organizationLd(platforms: ResolvedPlatform[] = []) {
   return {
     '@context': 'https://schema.org',
     '@type': 'Organization',
@@ -87,6 +110,45 @@ export function organizationLd() {
     logo: `${SITE_URL}/icon.svg`,
     description: BRAND.description,
     slogan: BRAND.tagline,
+    // Tells Google the Spotify / Apple listings are this same publisher.
+    ...(platforms.length ? { sameAs: platforms.map((p) => p.url) } : {}),
+  };
+}
+
+/**
+ * The show itself. This is the schema that makes Google understand the site is
+ * a podcast rather than a generic website, and `sameAs` is what links this page
+ * to the Spotify / Apple Podcasts / Amazon / YouTube Music listings of the same
+ * show — without it each platform looks like an unrelated entity.
+ */
+export function podcastSeriesLd(show: {
+  name: string;
+  description: string;
+  coverUrl?: string | null;
+  platforms: ResolvedPlatform[];
+  episodes: Array<{ title: string; slug: string }>;
+}) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'PodcastSeries',
+    '@id': `${SITE_URL}/#podcast`,
+    name: show.name,
+    description: clampDescription(show.description, 300),
+    url: SITE_URL,
+    ...(show.coverUrl ? { image: show.coverUrl } : {}),
+    ...(show.platforms.length ? { sameAs: show.platforms.map((p) => p.url) } : {}),
+    publisher: { '@id': `${SITE_URL}/#organization` },
+    inLanguage: 'en-US',
+    ...(show.episodes.length
+      ? {
+          numberOfEpisodes: show.episodes.length,
+          hasPart: show.episodes.map((e) => ({
+            '@type': 'PodcastEpisode',
+            name: e.title,
+            url: canonical(`/podcast/${e.slug}`),
+          })),
+        }
+      : {}),
   };
 }
 
@@ -100,6 +162,38 @@ export function webSiteLd() {
     description: BRAND.description,
     publisher: { '@id': `${SITE_URL}/#organization` },
     inLanguage: 'en-US',
+    // One of the signals Google reads when deciding whether to show a search
+    // box (and sitelinks) for the site. It cannot force either — that stays
+    // Google's call — but it makes the site eligible.
+    potentialAction: {
+      '@type': 'SearchAction',
+      target: {
+        '@type': 'EntryPoint',
+        urlTemplate: `${SITE_URL}/?q={search_term_string}`,
+      },
+      'query-input': 'required name=search_term_string',
+    },
+  };
+}
+
+/**
+ * The off-site places to listen, marked up as site navigation. This is what
+ * tells search engines the Spotify / Apple / Amazon / YouTube links form the
+ * show's primary navigation — the groundwork that makes sitelink-style results
+ * eligible (Google still decides the final SERP layout).
+ */
+export function siteNavigationLd(items: Array<{ name: string; url: string }>) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    '@id': `${SITE_URL}/#listen-nav`,
+    name: 'Listen to the podcast',
+    itemListElement: items.map((item, i) => ({
+      '@type': 'SiteNavigationElement',
+      position: i + 1,
+      name: item.name,
+      url: item.url,
+    })),
   };
 }
 
@@ -124,24 +218,21 @@ export function episodeLd(episode: {
   thumbnailUrl?: string | null;
   createdAt?: string | null;
   hostName?: string | null;
-  categoryName?: string | null;
+  /** Where this specific episode can be heard off-site. */
+  platforms?: ResolvedPlatform[];
 }) {
   return {
     '@context': 'https://schema.org',
     '@type': 'PodcastEpisode',
     url: canonical(`/podcast/${episode.slug}`),
+    ...(episode.platforms?.length ? { sameAs: episode.platforms.map((p) => p.url) } : {}),
     name: episode.title,
     description: clampDescription(episode.description ?? BRAND.description),
     timeRequired: isoDuration(episode.durationSeconds),
     duration: isoDuration(episode.durationSeconds),
     ...(episode.thumbnailUrl ? { image: episode.thumbnailUrl } : {}),
     ...(episode.createdAt ? { datePublished: episode.createdAt } : {}),
-    ...(episode.categoryName ? { genre: episode.categoryName } : {}),
-    partOfSeries: {
-      '@type': 'PodcastSeries',
-      name: BRAND.name,
-      url: SITE_URL,
-    },
+    partOfSeries: { '@id': `${SITE_URL}/#podcast` },
     associatedMedia: {
       '@type': 'AudioObject',
       contentUrl: canonical(`/podcast/${episode.slug}`),
@@ -177,17 +268,6 @@ export function playlistLd(playlist: {
   };
 }
 
-export function faqLd(items: Array<{ question: string; answer: string }>) {
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'FAQPage',
-    mainEntity: items.map((item) => ({
-      '@type': 'Question',
-      name: item.question,
-      acceptedAnswer: { '@type': 'Answer', text: item.answer },
-    })),
-  };
-}
 
 export function itemListLd(items: Array<{ name: string; path: string }>, name: string) {
   return {
@@ -205,7 +285,7 @@ export function itemListLd(items: Array<{ name: string; path: string }>, name: s
 }
 
 /** Seconds → ISO-8601 duration, e.g. 930 → "PT15M30S". */
-export function isoDuration(totalSeconds: number): string {
+function isoDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds || 0));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);

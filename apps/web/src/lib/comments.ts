@@ -7,6 +7,41 @@ export interface ThreadedComment {
   parent_id?: string | null;
 }
 
+/** The profile columns a comment query embeds to label its author. */
+export interface CommentAuthor {
+  full_name?: string | null;
+  username?: string | null;
+  email?: string | null;
+}
+
+/**
+ * A row from a comments query with the author profile embedded.
+ *
+ * PostgREST types an embedded to-one relation as an array in some client
+ * versions and an object in others, so both are accepted here — `commentAuthor`
+ * below is the one place that has to care.
+ */
+export interface CommentRow {
+  id: string;
+  body: string;
+  created_at: string;
+  user_id: string;
+  parent_id?: string | null;
+  author?: CommentAuthor | CommentAuthor[] | null;
+}
+
+/**
+ * Display name for a comment, falling back through the profile columns and
+ * finally to "Listener". Shared so the listener thread and the admin moderation
+ * list always label the same person the same way.
+ */
+export function commentAuthorName(author: CommentRow['author']): string {
+  const profile = Array.isArray(author) ? author[0] : author;
+  return (
+    profile?.full_name || profile?.username || profile?.email?.split('@')[0] || 'Listener'
+  );
+}
+
 /**
  * Locale and timezone are pinned deliberately. A bare toLocaleDateString()
  * reads the runtime's defaults, which differ between the Node server and the
