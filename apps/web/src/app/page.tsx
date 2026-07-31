@@ -375,7 +375,7 @@ export default async function HomePage() {
               {/* --- Now playing --- */}
               <Reveal direction="scale" className="order-1 min-w-0 lg:order-2">
                 <div className="mx-auto w-full max-w-[24rem] lg:mx-0 lg:ml-auto lg:max-w-none">
-                  <NowPlayingCard track={heroTrack} showName={show.name} cover="/hero-top.png" />
+                  <NowPlayingCard track={heroTrack} showName={show.name} cover="/hero-top.webp" />
                 </div>
               </Reveal>
             </div>
@@ -486,8 +486,11 @@ export default async function HomePage() {
             <Reveal>
               <div className="stream-panel overflow-hidden rounded-[1.75rem] p-5 sm:rounded-[2rem] sm:p-8 lg:p-10">
                 <div className="grid gap-10 lg:grid-cols-[minmax(0,22rem)_1fr] lg:items-center lg:gap-12">
-                  {/* hero-bottom.png stays — it's the second half of the same
-                      illustrated pair as hero-top.png in the player card above.
+                  {/* hero-bottom stays — it's the second half of the same
+                      illustrated pair as hero-top in the player card above.
+                      Both are served as .webp; the .png originals are kept only
+                      because feed.xml uses hero-top.png as the podcast artwork
+                      fallback, and Apple Podcasts accepts JPEG/PNG only.
                       Framed like a physical pane of frosted glass rather than a
                       bordered photo: a translucent, blurred mat around the
                       image with a bright inset line along the top where light
@@ -529,7 +532,7 @@ export default async function HomePage() {
                       <div className="shine relative rounded-[1.75rem] border border-white/15 bg-gradient-to-b from-white/[0.1] to-white/[0.03] p-2 shadow-[0_35px_80px_-30px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-xl transition-transform duration-500 ease-smooth motion-safe:group-hover:-translate-y-1 sm:p-2.5">
                         <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[1.25rem] sm:aspect-[16/11] lg:aspect-[4/3]">
                           <Image
-                            src="/hero-bottom.png"
+                            src="/hero-bottom.webp"
                             alt="A silhouette meditating at sunset beside a glowing lotus"
                             fill
                             sizes="(max-width: 1024px) 90vw, 380px"

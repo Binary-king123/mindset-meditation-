@@ -417,15 +417,22 @@
     animation: pulse-ring 4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
   }
 
-.marquee-mask:hover/* Audio wave */
+  /* Audio wave */
   .audio-wave {
     display: flex;
     align-items: center;
     gap: 2px;
   }
 
+  /* The bars scale rather than resize: animating `height` relayouts and
+     repaints every one of them each frame, which is what Lighthouse flags as a
+     non-composited animation. `scaleY` is compositor-only, so the same motion
+     costs nothing on the main thread. The base height stays a real height, so
+     call sites that set their own (episode-row) still stagger correctly. */
   .audio-wave-bar {
     @apply w-1 rounded-full;
+    height: 22px;
+    transform-origin: center;
     background: linear-gradient(hsl(var(--aura-2)), hsl(var(--aura-1)));
     animation: wave-bounce 0.9s ease-in-out infinite;
   }
@@ -476,6 +483,8 @@
 @media (prefers-reduced-motion: reduce) {
   .like-burst { animation: none; opacity: 0; }
   .like-pop   { animation: none; }
+  /* Infinite, so it never settles — stop it rather than loop it forever. */
+  .audio-wave-bar { animation: none; }
 }
 
 /* === Scroll reveal ===
@@ -633,8 +642,8 @@
 
 /* === Keyframes === */
 @keyframes wave-bounce {
-  0%, 100% { height: 7px; }
-  50% { height: 22px; }
+  0%, 100% { transform: scaleY(0.32); }
+  50%      { transform: scaleY(1); }
 }
 
 @keyframes gradient-pan {
