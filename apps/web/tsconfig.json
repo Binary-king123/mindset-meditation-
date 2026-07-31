@@ -1,8 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    // Matches tsconfig.base.json. NodeNext requires explicit file extensions on
+    // relative ESM imports and does not apply the `@/*` mapping inside a
+    // dynamic import() — neither matches how Next's bundler actually resolves,
+    // so a code-split import that typechecked would fail to build.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "lib": [
       "DOM",
       "DOM.Iterable",
@@ -29,8 +33,13 @@
     "incremental": true
   },
   "include": [
+    ".next-final-check/types/**/*.ts",
+    ".next-verify/types/**/*.ts",
+    ".next-verify2/types/**/*.ts",
+    ".next-verify3/types/**/*.ts",
+    ".next/types/**/*.ts",
     "src/**/*",
-    ".next/types/**/*.ts"
+    ".next-verify4/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

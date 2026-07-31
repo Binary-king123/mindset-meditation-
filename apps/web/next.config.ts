@@ -94,9 +94,21 @@ const csp = [
 ].join('; ');
 
 const nextConfig: NextConfig = {
-  // Emits .next/standalone with only the node_modules actually needed — this is
-  // what makes the app deployable to Hostinger / a plain VPS without shipping
-  // the whole monorepo.
+  /**
+   * `next dev` and `next build` both write here, and their output is not
+   * interchangeable: a production build emits a handful of vendor chunks, while
+   * dev emits one per package. Building while a dev server is running therefore
+   * leaves that dev server pointing at chunks that no longer exist —
+   * "Cannot find module './vendor-chunks/@supabase+auth-js.js'".
+   *
+   * Set NEXT_DIST_DIR to build somewhere else and leave a running dev server
+   * alone, e.g. `NEXT_DIST_DIR=.next-verify pnpm build`.
+   */
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+
+  // Emits <distDir>/standalone with only the node_modules actually needed —
+  // this is what makes the app deployable to Hostinger / a plain VPS without
+  // shipping the whole monorepo.
   output: 'standalone',
   // Monorepo root, so standalone traces files outside apps/web correctly.
   outputFileTracingRoot: `${__dirname}/../..`,

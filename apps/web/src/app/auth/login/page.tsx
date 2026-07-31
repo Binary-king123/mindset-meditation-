@@ -3,6 +3,7 @@
 import { Suspense, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import { safeRedirect } from '@/lib/safe-redirect';
 import { User, Lock, Loader2, MailCheck, KeyRound } from 'lucide-react';
 import {
   AuthShell,
@@ -20,6 +21,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function LoginForm() {
   const searchParams = useSearchParams();
   // Only reached when signup created the account but could not open a session.
+  const redirectParam = searchParams.get('redirect');
   const justRegistered = searchParams.get('created') === '1';
   const justReset = searchParams.get('reset') === '1';
 
@@ -62,9 +64,15 @@ function LoginForm() {
     }
 
     toast.success('Welcome back!');
-    // Admins owe the verification code before /admin will open.
+    // Middleware sends an admin here with ?redirect=<the page they wanted>.
+    // Carry it through the verification step so they land where they were
+    // going rather than back on the homepage.
     // Hard navigation so every client reads the freshly-set auth cookies.
-    window.location.assign(res.needsAdminCode ? '/auth/verify' : '/');
+    window.location.assign(
+      res.needsAdminCode
+        ? `/auth/verify?redirect=${encodeURIComponent(safeRedirect(redirectParam, '/admin'))}`
+        : safeRedirect(redirectParam, '/'),
+    );
   }
 
   const fieldError = (field: string) => (error?.field === field ? error.message : null);
@@ -114,18 +122,18 @@ function LoginForm() {
         />
 
         <div className="flex items-center justify-between gap-3 pt-1">
-          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+          <label className="flex min-h-[24px] items-center gap-2 py-1 text-sm text-muted-foreground cursor-pointer select-none">
             <input
               type="checkbox"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
-              className="w-4 h-4 rounded border-border text-primary focus:ring-2 focus:ring-primary accent-[hsl(var(--primary))]"
+              className="w-5 h-5 rounded border-border text-primary focus:ring-2 focus:ring-primary accent-[hsl(var(--primary))]"
             />
             Remember me
           </label>
           <Link
             href="/auth/forgot-password"
-            className="text-sm font-semibold text-primary hover:underline"
+            className="inline-flex min-h-[24px] items-center py-1 text-sm font-semibold text-primary hover:underline"
           >
             Forgot password?
           </Link>

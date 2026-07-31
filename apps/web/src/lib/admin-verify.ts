@@ -91,7 +91,7 @@ export async function adminIsVerified(
   return tokenIsValid(cookieValue, userId);
 }
 
-export async function tokenIsValid(
+async function tokenIsValid(
   token: string | undefined,
   userId: string,
 ): Promise<boolean> {

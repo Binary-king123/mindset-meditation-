@@ -8,21 +8,11 @@ import { LogoMark } from '@/components/layout/logo';
 import { BRAND } from '@/lib/brand';
 import { verifyAdminCodeAction } from '@/app/auth/actions';
 import { toast } from 'sonner';
-
-/**
- * Only same-origin relative paths may be redirected to. Without this, a link
- * like /auth/verify?redirect=https://evil.com would bounce a freshly verified
- * admin straight to an attacker's site — a ready-made phishing hop.
- * "//evil.com" is rejected too: browsers read it as protocol-relative.
- */
-function safeRedirect(target: string | null): string {
-  if (!target || !target.startsWith('/') || target.startsWith('//')) return '/admin';
-  return target;
-}
+import { safeRedirect } from '@/lib/safe-redirect';
 
 function VerifyForm() {
   const searchParams = useSearchParams();
-  const redirectTo = safeRedirect(searchParams.get('redirect'));
+  const redirectTo = safeRedirect(searchParams.get('redirect'), '/admin');
 
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);

@@ -45,14 +45,14 @@ on 6543 rejects DDL.
      "AllowedOrigins": ["http://localhost:3100", "https://your-domain.com"],
      "AllowedMethods": ["PUT", "GET"],
      "AllowedHeaders": ["*"],
-     "ExposeHeaders": ["ETag"],
      "MaxAgeSeconds": 3600
    }]
    ```
-   > **`ExposeHeaders: ["ETag"]` is required.** Files over 8 MB upload in
-   > parallel chunks, and the browser has to read each chunk's `ETag` to tell R2
-   > how to reassemble them. Without it, large uploads fail at the final step
-   > with a message telling you to add exactly this.
+   > `ExposeHeaders` is deliberately not needed. Files over 8 MB upload in
+   > parallel chunks, and S3 reassembles them from a manifest of per-chunk
+   > ETags — but the server asks R2 for that manifest itself (`ListParts`)
+   > rather than trusting the browser, so a bucket that hides the `ETag`
+   > response header still uploads fine.
 4. Fill the root `.env`:
    ```
    R2_ACCOUNT_ID=<account id>

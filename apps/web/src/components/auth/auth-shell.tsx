@@ -126,7 +126,11 @@ export function AuthField({
           <button
             type="button"
             onClick={() => setShown((v) => !v)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            // Sized as a target, not as an icon: the button used to be exactly
+            // the 16px glyph, which is well under the 24px touch minimum and
+            // genuinely awkward to hit on a phone. The icon is unchanged; only
+            // the hit area grew, and pr-10 on the input already reserves it.
+            className="absolute right-0 top-0 grid h-full w-11 place-items-center rounded-r-xl text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             aria-label={shown ? 'Hide password' : 'Show password'}
           >
             {shown ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
