@@ -33,7 +33,7 @@ export default function manifest(): MetadataRoute.Manifest {
         name: 'Your library',
         short_name: 'Saved',
         description: 'Your saved episodes',
-        url: '/saved',
+        url: '/playlists?tab=saved',
         icons: [{ src: '/apple-icon', sizes: '180x180' }],
       },
     ],

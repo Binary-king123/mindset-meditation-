@@ -75,7 +75,14 @@ export function pageMetadata({
     ...(noIndex ? { robots: { index: false, follow: true } } : {}),
     description: desc,
     keywords,
-    alternates: { canonical: url },
+    alternates: {
+      canonical: url,
+      // Every page advertises the feed. It has to live here rather than in the
+      // root layout: Next merges metadata by top-level key, so a page setting
+      // `alternates.canonical` replaces the layout's entire `alternates`
+      // object — which silently dropped the feed link from every route.
+      types: { 'application/rss+xml': `${SITE_URL}/feed.xml` },
+    },
     openGraph: {
       title,
       description: desc,
@@ -169,7 +176,7 @@ export function webSiteLd() {
       '@type': 'SearchAction',
       target: {
         '@type': 'EntryPoint',
-        urlTemplate: `${SITE_URL}/?q={search_term_string}`,
+        urlTemplate: `${SITE_URL}/search?q={search_term_string}`,
       },
       'query-input': 'required name=search_term_string',
     },
@@ -235,7 +242,9 @@ export function episodeLd(episode: {
     partOfSeries: { '@id': `${SITE_URL}/#podcast` },
     associatedMedia: {
       '@type': 'AudioObject',
-      contentUrl: canonical(`/podcast/${episode.slug}`),
+      // The audio file, not the page. This previously pointed at the episode
+      // page, which made the AudioObject claim an HTML document was an MP3.
+      contentUrl: canonical(`/api/episode-audio/${episode.slug}`),
       duration: isoDuration(episode.durationSeconds),
       encodingFormat: 'audio/mpeg',
     },
