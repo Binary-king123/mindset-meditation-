@@ -1,27 +1,29 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
-import Image from 'next/image';
-import { motion } from 'framer-motion';
-import { Loader2, Music, Image as ImageIcon, Save, ListMusic, Info } from 'lucide-react';
-import { toast } from 'sonner';
-import { createClient } from '@/lib/supabase/client';
-import { adminUpdatePodcast, adminCreatePlaylist } from '@/app/actions';
-import { formatDuration } from '@/lib/podcast';
+import { adminCreatePlaylist, adminUpdatePodcast } from '@/app/actions';
+import { CoverArtField } from '@/components/admin/cover-art-field';
+import { PlatformLinkFields } from '@/components/admin/platform-link-fields';
+import { SeoFields, type SeoOverrides } from '@/components/admin/seo-fields';
 import {
-  INPUT,
   ChipPicker,
   Field,
   FileInput,
+  INPUT,
+  type PlaylistOption,
+  accessToken,
+  readBlurDataUrl,
   readDuration,
   uploadAudio,
   uploadCover,
-  accessToken,
-  type PlaylistOption,
 } from '@/components/admin/upload-form';
-import { PlatformLinkFields } from '@/components/admin/platform-link-fields';
-import { parsePlatformLinks, type PlatformLinks } from '@/lib/platforms';
+import { type PlatformLinks, parsePlatformLinks } from '@/lib/platforms';
+import { formatDuration } from '@/lib/podcast';
+import { createClient } from '@/lib/supabase/client';
+import { motion } from 'framer-motion';
+import { Info, ListMusic, Loader2, Music, Save } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { type FormEvent, useState } from 'react';
+import { toast } from 'sonner';
 
 interface EditableTrack {
   id: string;
@@ -34,6 +36,8 @@ interface EditableTrack {
   audio_path: string | null;
   status: string;
   platform_links?: unknown;
+  meta_description?: string | null;
+  keywords?: string[] | null;
 }
 
 export function EditForm({
@@ -58,6 +62,12 @@ export function EditForm({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [pct, setPct] = useState(0);
+  // Prefilled from what is already stored, so the panel shows the live values
+  // rather than re-deriving them and implying an edit that never happened.
+  const [seo, setSeo] = useState<SeoOverrides>({
+    metaDescription: track.meta_description ?? '',
+    keywords: (track.keywords ?? []).join(', '),
+  });
   const [platformLinks, setPlatformLinks] = useState<PlatformLinks>(() =>
     parsePlatformLinks(track.platform_links),
   );
@@ -86,7 +96,7 @@ export function EditForm({
     try {
       // Only touch storage when a replacement file was picked. Audio and cover
       // go up together rather than one after the other.
-      const [durationSeconds, audioPath, coverResult] = await Promise.all([
+      const [durationSeconds, audioPath, coverResult, blurDataUrl] = await Promise.all([
         audio ? readDuration(audio) : Promise.resolve(null),
         audio
           ? uploadAudio(audio, {
@@ -96,6 +106,7 @@ export function EditForm({
             })
           : Promise.resolve(null),
         uploadCover(supabase, cover),
+        cover ? readBlurDataUrl(cover) : Promise.resolve(null),
       ]);
 
       setProgress('Saving…');
@@ -109,13 +120,22 @@ export function EditForm({
         durationSeconds,
         coverUrl: coverResult.url,
         coverPath: coverResult.path,
+        fileSizeBytes: audio?.size ?? null,
+        blurDataUrl,
+        metaDescription: seo.metaDescription.trim() || undefined,
+        keywords: seo.keywords
+          ? seo.keywords
+              .split(',')
+              .map((k) => k.trim())
+              .filter(Boolean)
+          : undefined,
         platformLinks,
       });
       if ('error' in res && res.error) throw new Error(res.error);
       if ('warning' in res && res.warning) toast.warning(res.warning);
 
       toast.success('Changes saved');
-      router.push('/admin/podcasts');
+      router.push('/admin/playlists');
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save');
@@ -160,23 +180,12 @@ export function EditForm({
         <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
         <div className="text-xs text-muted-foreground space-y-1">
           <p>
-            Current audio: <span className="text-foreground font-medium">
+            Current audio:{' '}
+            <span className="text-foreground font-medium">
               {track.audio_path ? formatDuration(track.duration_seconds) : 'none'}
             </span>{' '}
             — leave the field below empty to keep it.
           </p>
-          {track.thumbnail_url && (
-            <div className="flex items-center gap-2 pt-1">
-              <span>Current cover:</span>
-              <Image
-                src={track.thumbnail_url}
-                alt=""
-                width={32}
-                height={32}
-                className="w-8 h-8 rounded object-cover"
-              />
-            </div>
-          )}
         </div>
       </div>
 
@@ -190,15 +199,18 @@ export function EditForm({
         />
       </Field>
 
-      <Field label="Replace cover (optional)">
-        <FileInput
-          icon={<ImageIcon className="w-5 h-5" />}
-          accept="image/*"
-          file={cover}
-          onChange={setCover}
-          hint="Pick a file only if you want to swap the cover"
-        />
+      <Field label="Cover">
+        <CoverArtField file={cover} onChange={setCover} existingUrl={track.thumbnail_url} />
       </Field>
+
+      <SeoFields
+        title={title}
+        playlistTitle={playlists.find((p) => p.id === playlistId)?.title ?? null}
+        description={description}
+        durationSeconds={track.duration_seconds}
+        overrides={seo}
+        onChange={setSeo}
+      />
 
       <div className="pt-2">
         <h2 className="text-sm font-bold text-foreground mb-1">Platform links for this episode</h2>
@@ -241,7 +253,7 @@ export function EditForm({
         </button>
         <button
           type="button"
-          onClick={() => router.push('/admin/podcasts')}
+          onClick={() => router.push('/admin/playlists')}
           disabled={busy}
           className="press px-6 py-3 glass-card rounded-full font-semibold disabled:opacity-50"
         >

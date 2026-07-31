@@ -1,16 +1,17 @@
 'use client';
 
+import { adminCreatePlaylist, adminDeletePlaylist, adminUpdatePlaylist } from '@/app/actions';
+import { CoverArtField } from '@/components/admin/cover-art-field';
+import { Field, INPUT, uploadCover } from '@/components/admin/upload-form';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { createClient } from '@/lib/supabase/client';
+import { Loader2, Save, Trash2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 // Create or edit a playlist — the only way episodes are grouped for listeners.
 // Reuses the field and upload helpers from upload-form.tsx rather than growing
 // a second set of them.
-import { useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
-import Image from 'next/image';
-import { Loader2, Save, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { type FormEvent, useState } from 'react';
 import { toast } from 'sonner';
-import { createClient } from '@/lib/supabase/client';
-import { adminCreatePlaylist, adminUpdatePlaylist, adminDeletePlaylist } from '@/app/actions';
-import { INPUT, Field, FileInput, uploadCover } from '@/components/admin/upload-form';
 
 export interface EditablePlaylist {
   id: string;
@@ -30,6 +31,7 @@ export function PlaylistForm({ playlist }: { playlist?: EditablePlaylist }) {
   const [isPublic, setIsPublic] = useState(playlist?.is_public ?? true);
   const [cover, setCover] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -67,15 +69,13 @@ export function PlaylistForm({ playlist }: { playlist?: EditablePlaylist }) {
 
   async function remove() {
     if (!playlist) return;
-    // Episodes survive — only the grouping goes.
-    if (!confirm(`Delete "${playlist.title}"? Its ${playlist.track_count} episode(s) are kept.`)) {
-      return;
-    }
     setBusy(true);
+    // Episodes survive — only the grouping goes.
     const res = await adminDeletePlaylist(playlist.id);
     if ('error' in res && res.error) {
       toast.error(res.error);
       setBusy(false);
+      setConfirmingDelete(false);
       return;
     }
     toast.success('Playlist deleted');
@@ -108,30 +108,7 @@ export function PlaylistForm({ playlist }: { playlist?: EditablePlaylist }) {
         label="Cover art"
         hint="Square works best — 1400×1400 or larger. The newest playlist's cover is also used as the homepage artwork."
       >
-        <div className="flex items-start gap-4">
-          {playlist?.thumbnail_url && !cover && (
-            <Image
-              src={playlist.thumbnail_url}
-              alt=""
-              width={80}
-              height={80}
-              className="w-20 h-20 rounded-xl object-cover shrink-0"
-            />
-          )}
-          <div className="flex-1 min-w-0">
-            <FileInput
-              icon={<ImageIcon className="w-5 h-5" />}
-              accept="image/*"
-              file={cover}
-              onChange={setCover}
-              hint={
-                playlist?.thumbnail_url
-                  ? 'Pick a file only if you want to replace the current cover'
-                  : 'JPG / PNG / WebP, up to 5MB'
-              }
-            />
-          </div>
-        </div>
+        <CoverArtField file={cover} onChange={setCover} existingUrl={playlist?.thumbnail_url} />
       </Field>
 
       <label className="flex items-center gap-3 cursor-pointer select-none">
@@ -162,7 +139,7 @@ export function PlaylistForm({ playlist }: { playlist?: EditablePlaylist }) {
         {playlist && (
           <button
             type="button"
-            onClick={remove}
+            onClick={() => setConfirmingDelete(true)}
             disabled={busy}
             className="press px-5 py-3 rounded-full font-semibold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 flex items-center gap-2"
           >
@@ -171,6 +148,18 @@ export function PlaylistForm({ playlist }: { playlist?: EditablePlaylist }) {
           </button>
         )}
       </div>
+
+      {playlist && (
+        <ConfirmDialog
+          open={confirmingDelete}
+          title={`Delete "${playlist.title}"?`}
+          description={`Its ${playlist.track_count} episode${playlist.track_count === 1 ? '' : 's'} stay published — only the playlist grouping is removed.`}
+          confirmLabel="Delete playlist"
+          busy={busy}
+          onConfirm={remove}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
     </form>
   );
 }

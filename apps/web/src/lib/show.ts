@@ -1,7 +1,9 @@
 // The podcast's public identity, assembled from the three places that own it:
 //
 //   name / description  → lib/brand.ts (code — one rename touches one file)
-//   platform links      → podcast.show.platform_links (admin, /admin/links)
+//   platform links      → podcast.show.platform_links (set in SQL; there is
+//                         no admin screen for it — episodes carry their own
+//                         links, and the public surfaces use HARDCODED_PLATFORMS)
 //   cover artwork       → the newest public playlist's cover (admin, /admin/playlists)
 //
 // Artwork is deliberately not a fourth thing to upload: playlists already carry

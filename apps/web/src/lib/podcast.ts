@@ -43,15 +43,45 @@ export function formatDuration(totalSeconds: number | null | undefined): string 
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+/**
+ * The URL-safe stem of a title. Deterministic — no random suffix.
+ *
+ * This used to append `Math.random()` to every slug, which made each URL
+ * unguessable (`morning-calm-k3f9x`), leaked nothing useful to search engines,
+ * and only *probabilistically* avoided the `tracks_slug_key` unique
+ * constraint — a collision was an unhandled Postgres error. Uniqueness is now
+ * resolved explicitly by `uniqueSlug()` below.
+ */
 export function slugify(input: string): string {
   const base = input
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  const suffix = Math.random().toString(36).slice(2, 7);
-  return `${base || 'podcast'}-${suffix}`;
+    .slice(0, 60)
+    .replace(/-+$/, ''); // a trailing dash after the 60-char cut looks broken
+  return base || 'episode';
+}
+
+/**
+ * `slugify` plus a numeric suffix when the stem is already taken:
+ * `morning-calm`, then `morning-calm-2`, `morning-calm-3`.
+ *
+ * `taken` is the set of existing slugs sharing the stem — the caller fetches it
+ * with a single prefix query. This is advisory only: two concurrent uploads of
+ * the same title can still both pick `-2`, so the caller must also handle the
+ * unique-violation and retry (see `adminCreatePodcast`).
+ */
+export function uniqueSlug(title: string, taken: Iterable<string>): string {
+  const base = slugify(title);
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base}-${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  // 1000 episodes with one title is not a real scenario; fall back rather than loop.
+  return `${base}-${Date.now()}`;
 }
 
 // Columns selected for a podcast card / detail. Plain '*' since episodes are
@@ -67,36 +97,6 @@ export interface PlaylistSummary {
   track_count: number;
   total_duration_seconds: number;
 }
-
-export const DEMO_PLAYLISTS: PlaylistSummary[] = [
-  {
-    id: 'demo-playlist-1',
-    title: 'Relaxation',
-    slug: 'playlists',
-    description: 'Calming sessions for peace, softness, and stillness.',
-    thumbnail_url: null,
-    track_count: 0,
-    total_duration_seconds: 0,
-  },
-  {
-    id: 'demo-playlist-2',
-    title: 'Still Waters',
-    slug: 'playlists',
-    description: 'Meditative soundscapes inspired by lakes, light, and quiet mornings.',
-    thumbnail_url: null,
-    track_count: 0,
-    total_duration_seconds: 0,
-  },
-  {
-    id: 'demo-playlist-3',
-    title: 'Nature Path',
-    slug: 'playlists',
-    description: 'Grounding audio and breath-led mindfulness inspired by open landscapes.',
-    thumbnail_url: null,
-    track_count: 0,
-    total_duration_seconds: 0,
-  },
-] as const;
 
 export const PLAYLIST_SELECT =
   'id, title, slug, description, thumbnail_url, track_count, total_duration_seconds';

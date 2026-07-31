@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Upload, ListMusic, ArrowLeft, MessageCircle, BarChart3, Link2 } from 'lucide-react';
+import { Upload, ListMusic, ArrowLeft, MessageCircle, BarChart3 } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { checkAdmin } from '@/lib/admin-guard';
 
@@ -12,7 +12,6 @@ const NAV = [
   { href: '/admin/upload', label: 'Upload', icon: Upload },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/admin/comments', label: 'Comments', icon: MessageCircle },
-  { href: '/admin/links', label: 'Links', icon: Link2 },
 ];
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {

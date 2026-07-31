@@ -16,7 +16,7 @@ export default async function EditPodcastPage({ params }: { params: Promise<{ id
       supabase
         .from('tracks')
         .select(
-          'id, title, slug, description, instructor_name, duration_seconds, thumbnail_url, audio_path, status, platform_links',
+          'id, title, slug, description, instructor_name, duration_seconds, thumbnail_url, audio_path, status, platform_links, meta_description, keywords',
         )
         .eq('id', id)
         .maybeSingle(),

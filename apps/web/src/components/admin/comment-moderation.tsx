@@ -1,11 +1,17 @@
 'use client';
 
-import { useMemo, useState, useTransition, type FormEvent } from 'react';
-import Link from 'next/link';
-import { Trash2, Send, CornerDownRight, ExternalLink, MessageCircle } from 'lucide-react';
-import { toast } from 'sonner';
 import { addComment, deleteComment } from '@/app/actions';
-import { buildThreads, formatCommentDate, removeWithReplies, commentAuthorName, type CommentRow } from '@/lib/comments';
+import {
+  type CommentRow,
+  buildThreads,
+  commentAuthorName,
+  formatCommentDate,
+  removeWithReplies,
+} from '@/lib/comments';
+import { CornerDownRight, ExternalLink, MessageCircle, Send, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { type FormEvent, useMemo, useState, useTransition } from 'react';
+import { toast } from 'sonner';
 
 export interface ModRow {
   id: string;

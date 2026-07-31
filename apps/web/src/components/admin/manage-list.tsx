@@ -1,11 +1,12 @@
 'use client';
 
+import { adminDeletePodcast, adminSetStatus } from '@/app/actions';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { formatDuration } from '@/lib/podcast';
+import { Eye, EyeOff, ListMusic, Pencil, Trash2 } from 'lucide-react';
+import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
-import Link from 'next/link';
-import { Trash2, Eye, EyeOff, ListMusic, Pencil } from 'lucide-react';
-import { adminSetStatus, adminDeletePodcast } from '@/app/actions';
-import { formatDuration } from '@/lib/podcast';
 
 export interface ManageRow {
   id: string;
@@ -21,6 +22,9 @@ export interface ManageRow {
 export function ManageList({ rows }: { rows: ManageRow[] }) {
   const [items, setItems] = useState<ManageRow[]>(rows);
   const [pending, startTransition] = useTransition();
+  // The episode awaiting a delete confirmation, or null when the dialog is
+  // closed. Holding the row (not just an id) lets the dialog name it.
+  const [toDelete, setToDelete] = useState<ManageRow | null>(null);
 
   function setStatus(id: string, status: 'published' | 'draft') {
     startTransition(async () => {
@@ -33,15 +37,17 @@ export function ManageList({ rows }: { rows: ManageRow[] }) {
     });
   }
 
-  function del(id: string) {
-    if (!window.confirm('Delete this podcast?')) return;
+  function confirmDelete() {
+    const row = toDelete;
+    if (!row) return;
     startTransition(async () => {
-      const r = await adminDeletePodcast(id);
+      const r = await adminDeletePodcast(row.id);
+      setToDelete(null);
       if ('error' in r) {
         toast.error(r.error);
         return;
       }
-      setItems((prev) => prev.filter((i) => i.id !== id));
+      setItems((prev) => prev.filter((i) => i.id !== row.id));
     });
   }
 
@@ -110,7 +116,7 @@ export function ManageList({ rows }: { rows: ManageRow[] }) {
           )}
           <button
             type="button"
-            onClick={() => del(i.id)}
+            onClick={() => setToDelete(i)}
             disabled={pending}
             className="p-2 rounded-lg hover:bg-destructive/10 text-destructive"
             title="Delete"
@@ -119,6 +125,16 @@ export function ManageList({ rows }: { rows: ManageRow[] }) {
           </button>
         </div>
       ))}
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        title={`Delete "${toDelete?.title}"?`}
+        description="This removes it from the site. This can't be undone from here."
+        confirmLabel="Delete episode"
+        busy={pending}
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
+      />
     </div>
   );
 }

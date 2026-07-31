@@ -1,10 +1,14 @@
 'use server';
 
+import { PLATFORMS, type PlatformLinks, sanitizePlatformUrl } from '@/lib/platforms';
+import { slugify, uniqueSlug } from '@/lib/podcast';
+import { generateEpisodeMetadata } from '@/lib/seo/generate';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+import type { PodcastClient } from '@/lib/supabase/types';
 // Server Actions — run as the signed-in user; RLS enforces authorization.
 import { revalidatePath } from 'next/cache';
-import { createClient } from '@/lib/supabase/server';
-import { slugify } from '@/lib/podcast';
-import { PLATFORMS, sanitizePlatformUrl, type PlatformLinks } from '@/lib/platforms';
+import { checkAdmin } from '@/lib/admin-guard';
 
 /**
  * Keeps only known platform ids holding valid http(s) URLs. Without the
@@ -19,6 +23,88 @@ function cleanPlatformLinks(input: PlatformLinks | undefined): PlatformLinks {
     if (url) out[id] = url;
   }
   return out;
+}
+
+/**
+ * Inserts a row under a slug derived from its title, resolving collisions.
+ *
+ * Both `tracks.slug` and `playlists.slug` carry a unique constraint, and
+ * `slugify` is deterministic — so two titles that reduce to the same stem
+ * ("Sleep & Calm" and "Sleep Calm") would otherwise fail with a raw Postgres
+ * error. Shared by episodes and playlists because the requirement is identical.
+ *
+ * Two steps, because neither alone is sufficient: a prefix query picks the next
+ * free suffix (`-2`, `-3`) so the common case is one round trip, and the retry
+ * on the unique-violation closes the race where two concurrent inserts resolve
+ * to the same candidate between the query and the write.
+ *
+ * The existence check runs on the service-role client, not the caller's. Both
+ * `tracks_slug_key` and `playlists_slug_lower_key` are plain unique indexes —
+ * neither excludes soft-deleted rows, so a deleted row still occupies its
+ * slug. `playlists_select`'s RLS hides soft-deleted rows from every caller,
+ * admin included (deliberately — see migration 031), so a normal, RLS-checked
+ * SELECT here is blind to exactly the rows that can still collide. That blind
+ * spot meant every retry re-ran the same query, got the same incomplete
+ * answer, and proposed the same doomed bare slug three times in a row — an
+ * admin recreating a playlist under a previously-deleted title always hit
+ * "Could not find a free URL for that title" instead of just getting `-2`.
+ * Every call site already passed `requireAdmin()` before reaching here.
+ */
+async function insertWithUniqueSlug<T extends { id: string; slug: string }>(
+  supabase: PodcastClient,
+  table: 'tracks' | 'playlists',
+  title: string,
+  row: Record<string, unknown>,
+  select = 'id, slug',
+): Promise<{ data: T | null; error: string | null }> {
+  const base = slugify(title);
+  const admin = createAdminClient();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: existing } = await admin.from(table).select('slug').like('slug', `${base}%`);
+
+    const slug = uniqueSlug(
+      title,
+      ((existing ?? []) as Array<{ slug: string }>).map((r) => r.slug),
+    );
+
+    const { data, error } = await supabase
+      .from(table)
+      .insert({ ...row, slug })
+      .select(select)
+      .single();
+
+    if (!error) return { data: data as unknown as T, error: null };
+    // 23505 = unique_violation. Anything else is a real failure — report it.
+    if (!error.message.includes('duplicate key') && error.code !== '23505') {
+      return { data: null, error: error.message };
+    }
+  }
+  return { data: null, error: 'Could not find a free URL for that title — try a different one' };
+}
+
+/**
+ * Whether the signed-in listener has saved this episode.
+ *
+ * The player and the homepage card both used to initialise their heart to
+ * "not saved" and never check — so opening an episode you had already saved
+ * showed an empty heart, and the first press *removed* it from your library.
+ * Returns false for signed-out visitors, who have no library.
+ */
+export async function isSaved(trackId: string): Promise<boolean> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  const { data } = await supabase
+    .from('favorites')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('track_id', trackId)
+    .maybeSingle();
+  return Boolean(data);
 }
 
 export async function toggleSave(trackId: string) {
@@ -76,8 +162,7 @@ export async function addComment(trackId: string, body: string, parentId?: strin
   return {
     comment: {
       ...data,
-      author:
-        profile?.full_name || profile?.username || profile?.email?.split('@')[0] || 'You',
+      author: profile?.full_name || profile?.username || profile?.email?.split('@')[0] || 'You',
       mine: true,
       isAdmin: role === 'admin' || role === 'super_admin',
     },
@@ -86,6 +171,27 @@ export async function addComment(trackId: string, body: string, parentId?: strin
 
 export async function deleteComment(id: string) {
   const supabase = await createClient();
+  // RLS (comments_delete_own) already restricts this to the author or an
+  // admin — a mismatched id just deletes zero rows, no error. This explicit
+  // check exists so a caller gets an honest "not authorized" instead of a
+  // silent no-op, and so the guarantee doesn't rest on RLS alone.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: 'You must be signed in.' };
+
+  const { data: comment } = await supabase
+    .from('comments')
+    .select('user_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (!comment) return { error: 'Comment not found' };
+
+  if (comment.user_id !== user.id) {
+    const gate = await checkAdmin();
+    if (!gate.ok) return { error: 'Not authorized to delete this comment' };
+  }
+
   const { error } = await supabase.from('comments').delete().eq('id', id);
   return error ? { error: error.message } : { ok: true };
 }
@@ -101,8 +207,24 @@ export async function deleteComment(id: string) {
 function schemaHint(message: string): string {
   const behind = /schema cache|could not find the|does not exist/i.test(message);
   return behind
-    ? `${message}\n\nThe database looks a migration behind the app. Run \`pnpm db:status\` and apply what is pending — see migrations/README.md.`
+    ? `${message}\n\nThe database looks a migration behind the app. Check its version with \`SELECT version FROM podcast.schema_migrations ORDER BY version DESC LIMIT 1\` and apply the pending file — see migrations/README.md.`
     : message;
+}
+
+/**
+ * The two files nothing on the site links to, but which every crawler polls:
+ * /sitemap.xml (Google) and /feed.xml (Apple/Spotify and podcast directories).
+ *
+ * Both are ISR'd with `revalidate = 3600`. Without an explicit purge a freshly
+ * published episode is live on the site immediately but stays missing from the
+ * sitemap and the feed for up to an hour — so the crawler that happens to visit
+ * in that window sees nothing new. Every mutation that changes what is public
+ * calls this, which is what makes "publish → Google discovers the URL" actually
+ * hold rather than hold-eventually.
+ */
+function revalidateDiscovery() {
+  revalidatePath('/sitemap.xml');
+  revalidatePath('/feed.xml');
 }
 
 /** Playlists are how listeners browse, so every change touches these three. */
@@ -110,6 +232,33 @@ function revalidatePlaylist(slug?: string | null) {
   revalidatePath('/');
   revalidatePath('/playlists');
   if (slug) revalidatePath(`/playlist/${slug}`);
+  // Playlists are sitemap entries in their own right.
+  revalidateDiscovery();
+}
+
+/**
+ * Every `admin*` action below starts with this.
+ *
+ * A Server Action is addressable by its generated ID, not by which page happens
+ * to import it — so "this action is only referenced from /admin" is not an
+ * access control. Row-level security covers the `tracks` writes (see
+ * `tracks_insert_admin` / `tracks_update_admin` / `tracks_delete_admin` in
+ * fullschema.sql), but it does NOT cover playlists: `playlists_insert_own` only
+ * requires `user_id = auth.uid()`, so before this guard any signed-in listener
+ * could invoke `adminCreatePlaylist` and publish a public playlist onto the
+ * homepage, /playlists and the sitemap.
+ *
+ * Returns an error string to hand straight back to the caller, or the caller's
+ * id when they are a verified admin. `checkAdmin` is React-cached, so an action
+ * that needs the id gets it from here rather than paying for a second
+ * `auth.getUser()` round-trip.
+ */
+type AdminGate = { error: string; userId?: never } | { error?: never; userId: string };
+
+async function requireAdmin(): Promise<AdminGate> {
+  const admin = await checkAdmin();
+  if (admin.ok && admin.userId) return { userId: admin.userId };
+  return { error: admin.reason === 'unauthenticated' ? 'Please sign in' : 'Not authorised' };
 }
 
 export interface PlaylistInput {
@@ -122,11 +271,9 @@ export interface PlaylistInput {
 }
 
 export async function adminCreatePlaylist(input: PlaylistInput) {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: 'Please sign in' };
 
   const title = input.title.trim();
   if (!title) return { error: 'Playlist name is required' };
@@ -140,31 +287,31 @@ export async function adminCreatePlaylist(input: PlaylistInput) {
     .maybeSingle();
   if (existing) return { error: 'A playlist with that name already exists' };
 
-  const { data, error } = await supabase
-    .from('playlists')
-    .insert({
-      user_id: user.id,
+  const { data, error } = await insertWithUniqueSlug<{ id: string; title: string; slug: string }>(
+    supabase,
+    'playlists',
+    title,
+    {
+      user_id: gate.userId,
       title,
       description: input.description?.trim() || null,
       thumbnail_url: input.coverUrl || null,
       thumbnail_path: input.coverPath || null,
-      slug: slugify(title),
       is_public: input.isPublic ?? true,
-    })
-    .select('id, title, slug')
-    .single();
+    },
+    'id, title, slug',
+  );
 
-  if (error) return { error: schemaHint(error.message) };
+  if (error) return { error: schemaHint(error) };
+  if (!data) return { error: 'Could not save the playlist' };
   revalidatePlaylist(data.slug);
   return { playlist: data };
 }
 
 export async function adminUpdatePlaylist(input: PlaylistInput & { id: string }) {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: 'Please sign in' };
 
   const title = input.title.trim();
   if (!title) return { error: 'Playlist name is required' };
@@ -197,16 +344,31 @@ export async function adminUpdatePlaylist(input: PlaylistInput & { id: string })
 
 /** Soft delete, matching adminDeletePodcast — the episodes inside are kept. */
 export async function adminDeletePlaylist(id: string) {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const { data, error } = await supabase
+
+  // Read the slug BEFORE the delete. Reading it back afterwards cannot work:
+  // `playlists_select` requires `deleted_at IS NULL`, so the freshly deleted row
+  // fails the select and the returned slug was always null — which meant
+  // `/playlist/<slug>` never got purged and kept serving a deleted playlist
+  // until its own revalidate window elapsed.
+  const { data: existing } = await supabase
     .from('playlists')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('id', id)
     .select('slug')
+    .eq('id', id)
     .maybeSingle();
 
-  if (error) return { error: error.message };
-  revalidatePlaylist(data?.slug);
+  // An RPC, not a direct `.update()`. The obvious `UPDATE ... SET deleted_at`
+  // was verified — policy text, and auth.uid()/is_admin() in the very same
+  // transaction as the failing statement — to be correct and still rejected by
+  // RLS on this table for reasons that don't trace back to anything in the
+  // policy. podcast.delete_playlist() performs the identical owner-or-admin
+  // check itself and updates as its own (RLS-exempt) owner. See migration 033.
+  const { error } = await supabase.rpc('delete_playlist', { p_id: id });
+
+  if (error) return { error: schemaHint(error.message) };
+  revalidatePlaylist((existing as { slug: string | null } | null)?.slug);
   return { ok: true };
 }
 
@@ -219,42 +381,84 @@ interface CreatePodcastInput {
   audioPath: string;
   coverUrl?: string | null;
   coverPath?: string | null;
+  /** Read from the File in the browser — there is no server-side ffmpeg. */
+  fileSizeBytes?: number | null;
+  /** Base64 LQIP produced by downscaling the cover on a canvas. */
+  blurDataUrl?: string | null;
+  /**
+   * Optional admin overrides of the generated SEO copy. Blank/absent means
+   * "use the generated value" — the upload form previews the generated text as
+   * a placeholder and only sends these once someone types over it.
+   */
+  metaDescription?: string;
+  keywords?: string[];
   /** Per-episode overrides of the show-wide platform links. */
   platformLinks?: PlatformLinks;
   publish: boolean;
 }
 
 export async function adminCreatePodcast(input: CreatePodcastInput) {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: 'Please sign in' };
 
   const title = input.title.trim();
   if (!title) return { error: 'Title is required' };
   if (!input.audioPath) return { error: 'Audio file is required' };
+  // A 0 here would be clamped to 1 second and silently ship a broken episode;
+  // the form blocks submission, and this is the server-side backstop.
+  if (!input.durationSeconds || input.durationSeconds < 1) {
+    return { error: 'Could not read the audio duration — re-select the file and try again' };
+  }
 
-  const { data, error } = await supabase
-    .from('tracks')
-    .insert({
-      title,
-      slug: slugify(title),
-      description: input.description?.trim() || null,
-      short_description: input.description?.trim().slice(0, 300) || null,
-      duration_seconds: Math.max(1, Math.round(input.durationSeconds || 1)),
-      audio_url: input.audioPath,
-      audio_path: input.audioPath,
-      thumbnail_url: input.coverUrl || null,
-      thumbnail_path: input.coverPath || null,
-      instructor_name: input.channel?.trim() || null,
-      platform_links: cleanPlatformLinks(input.platformLinks),
-      status: input.publish ? 'published' : 'draft',
-    })
-    .select('id, slug')
-    .single();
+  // The playlist title feeds the generated copy, so fetch it before generating.
+  let playlistTitle: string | null = null;
+  if (input.playlistId) {
+    const { data: pl } = await supabase
+      .from('playlists')
+      .select('title')
+      .eq('id', input.playlistId)
+      .maybeSingle();
+    playlistTitle = pl?.title ?? null;
+  }
 
-  if (error) return { error: schemaHint(error.message) };
+  const durationSeconds = Math.round(input.durationSeconds);
+  const description = input.description?.trim() || null;
+  const generated = generateEpisodeMetadata({
+    title,
+    playlistTitle,
+    durationSeconds,
+    description,
+  });
+
+  const row = {
+    title,
+    description,
+    // short_description keeps its historical meaning (the card blurb) but is
+    // now a sentence-boundary excerpt rather than a mid-word .slice(0, 300).
+    short_description: generated.excerpt.slice(0, 300),
+    excerpt: generated.excerpt,
+    meta_description: input.metaDescription?.trim() || generated.metaDescription,
+    keywords: input.keywords?.length ? input.keywords : generated.keywords,
+    duration_seconds: durationSeconds,
+    audio_url: input.audioPath,
+    audio_path: input.audioPath,
+    thumbnail_url: input.coverUrl || null,
+    thumbnail_path: input.coverPath || null,
+    blur_data_url: input.blurDataUrl || null,
+    file_size_bytes: input.fileSizeBytes ?? null,
+    bitrate_kbps: input.fileSizeBytes
+      ? Math.round((input.fileSizeBytes * 8) / durationSeconds / 1000)
+      : null,
+    instructor_name: input.channel?.trim() || null,
+    platform_links: cleanPlatformLinks(input.platformLinks),
+    status: input.publish ? 'published' : 'draft',
+    published_at: input.publish ? new Date().toISOString() : null,
+  };
+
+  const { data, error } = await insertWithUniqueSlug(supabase, 'tracks', title, row);
+  if (error) return { error: schemaHint(error) };
+  if (!data) return { error: 'Could not save the episode' };
 
   // Attach to a playlist, appending to the end. The trg_playlist_stats trigger
   // keeps track_count / total_duration_seconds in sync.
@@ -272,13 +476,18 @@ export async function adminCreatePodcast(input: CreatePodcastInput) {
     // The episode itself saved fine — report the link failure without losing it.
     if (linkError) {
       revalidatePath('/');
-      return { podcast: data, warning: `Saved, but could not add to playlist: ${linkError.message}` };
+      revalidateDiscovery();
+      return {
+        podcast: data,
+        warning: `Saved, but could not add to playlist: ${linkError.message}`,
+      };
     }
     revalidatePath('/playlists');
   }
 
   revalidatePath('/');
-  revalidatePath('/admin/podcasts');
+  revalidatePath('/admin/playlists');
+  revalidateDiscovery();
   return { podcast: data };
 }
 
@@ -294,28 +503,76 @@ interface UpdatePodcastInput {
   /** Only set when the admin replaced the cover. */
   coverUrl?: string | null;
   coverPath?: string | null;
+  fileSizeBytes?: number | null;
+  blurDataUrl?: string | null;
+  /** Blank means "regenerate" — see CreatePodcastInput. */
+  metaDescription?: string;
+  keywords?: string[];
   /** Per-episode overrides of the show-wide platform links. */
   platformLinks?: PlatformLinks;
 }
 
 /** Edits an existing episode. RLS restricts track updates to admins/moderators. */
 export async function adminUpdatePodcast(input: UpdatePodcastInput) {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: 'Please sign in' };
 
   const title = input.title.trim();
   if (!title) return { error: 'Title is required' };
 
+  // The generated copy is derived from title + playlist + duration, so it has
+  // to be recomputed on edit or an episode keeps the description of its old
+  // title. The slug is deliberately NOT regenerated — see below.
+  const { data: current } = await supabase
+    .from('tracks')
+    .select('duration_seconds, published_at, status')
+    .eq('id', input.id)
+    .maybeSingle();
+
+  const existingTrack = (current ?? null) as {
+    duration_seconds: number;
+    published_at: string | null;
+    status: string;
+  } | null;
+
+  let playlistTitle: string | null = null;
+  if (input.playlistId) {
+    const { data: pl } = await supabase
+      .from('playlists')
+      .select('title')
+      .eq('id', input.playlistId)
+      .maybeSingle();
+    playlistTitle = pl?.title ?? null;
+  }
+
+  const durationSeconds =
+    input.durationSeconds && input.durationSeconds > 0
+      ? Math.round(input.durationSeconds)
+      : (existingTrack?.duration_seconds ?? 1);
+
+  const description = input.description?.trim() || null;
+  const generated = generateEpisodeMetadata({
+    title,
+    playlistTitle,
+    durationSeconds,
+    description,
+  });
+
   // biome-ignore lint/suspicious/noExplicitAny: partial update over an untyped row
   const patch: Record<string, any> = {
     title,
-    description: input.description?.trim() || null,
-    short_description: input.description?.trim().slice(0, 300) || null,
+    description,
+    short_description: generated.excerpt.slice(0, 300),
+    excerpt: generated.excerpt,
+    meta_description: input.metaDescription?.trim() || generated.metaDescription,
+    keywords: input.keywords?.length ? input.keywords : generated.keywords,
     instructor_name: input.channel?.trim() || null,
   };
+
+  // NB: `slug` is intentionally absent. Renaming an episode must not change its
+  // URL — inbound links, the sitemap Google already crawled, and any podcast
+  // client that stored the page URL would all break.
 
   // Only overwrite media when a replacement was actually uploaded.
   if (input.audioPath) {
@@ -323,11 +580,18 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
     patch.audio_url = input.audioPath;
     if (input.durationSeconds && input.durationSeconds > 0) {
       patch.duration_seconds = Math.round(input.durationSeconds);
+      if (input.fileSizeBytes) {
+        patch.file_size_bytes = input.fileSizeBytes;
+        patch.bitrate_kbps = Math.round(
+          (input.fileSizeBytes * 8) / Math.round(input.durationSeconds) / 1000,
+        );
+      }
     }
   }
   if (input.coverUrl) {
     patch.thumbnail_url = input.coverUrl;
     patch.thumbnail_path = input.coverPath ?? null;
+    patch.blur_data_url = input.blurDataUrl ?? null;
   }
   if (input.platformLinks) {
     patch.platform_links = cleanPlatformLinks(input.platformLinks);
@@ -366,7 +630,10 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
           position: count ?? 0,
         });
         if (linkError) {
-          return { podcast: data, warning: `Saved, but playlist move failed: ${linkError.message}` };
+          return {
+            podcast: data,
+            warning: `Saved, but playlist move failed: ${linkError.message}`,
+          };
         }
       }
     }
@@ -374,62 +641,52 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
 
   revalidatePath('/');
   revalidatePath('/playlists');
-  revalidatePath('/admin/podcasts');
+  revalidatePath('/admin/playlists');
   revalidatePath(`/podcast/${data.slug}`);
+  revalidateDiscovery();
   return { podcast: data };
 }
 
-/**
- * Updates the platform links for the whole podcast — the list behind
- * /admin/links. Per-episode overrides live on tracks.platform_links.
- *
- * RLS (show_manage_admin) is what authorizes this; a non-admin's update matches
- * no row and changes nothing.
- */
-export async function adminUpdatePlatformLinks(input: { platformLinks?: PlatformLinks }) {
+export async function adminSetStatus(id: string, status: 'draft' | 'published' | 'archived') {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: 'Please sign in' };
 
-  const cleaned = cleanPlatformLinks(input.platformLinks);
-
-  // .select() so we can tell whether a row was actually written. Without it an
-  // RLS-blocked update returns no error and updates nothing, which is exactly
-  // how a save can look successful yet change nothing.
-  const { data, error } = await supabase
-    .from('show')
-    .update({ platform_links: cleaned })
-    .eq('id', true)
-    .select('platform_links');
-  if (error) return { error: schemaHint(error.message) };
-  if (!data || data.length === 0) {
-    // The singleton row exists on a seeded database, so no match means the
-    // caller was not allowed to write it.
-    return { error: 'Could not save — this account is not allowed to edit the show links.' };
+  // published_at is stamped once, the first time an episode goes public, and
+  // never moved after that — un-publishing and re-publishing must not restate
+  // the episode as brand new in the RSS feed.
+  // biome-ignore lint/suspicious/noExplicitAny: partial update over an untyped row
+  const patch: Record<string, any> = { status };
+  if (status === 'published') {
+    const { data } = await supabase
+      .from('tracks')
+      .select('published_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (!(data as { published_at: string | null } | null)?.published_at) {
+      patch.published_at = new Date().toISOString();
+    }
   }
 
-  // The homepage is cached (revalidate = 300), so it needs an explicit nudge
-  // for a links change to show up straight away.
-  revalidatePath('/', 'layout');
-  return { ok: true, platformLinks: data[0].platform_links as PlatformLinks };
-}
-
-export async function adminSetStatus(id: string, status: 'draft' | 'published' | 'archived') {
-  const supabase = await createClient();
-  const { error } = await supabase.from('tracks').update({ status }).eq('id', id);
+  const { error } = await supabase.from('tracks').update(patch).eq('id', id);
   if (error) return { error: error.message };
   revalidatePath('/');
-  revalidatePath('/admin/podcasts');
+  revalidatePath('/admin/playlists');
+  revalidateDiscovery();
   return { ok: true };
 }
 
 export async function adminDeletePodcast(id: string) {
+  const gate = await requireAdmin();
+  if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const { error } = await supabase.from('tracks').update({ deleted_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await supabase
+    .from('tracks')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id);
   if (error) return { error: error.message };
   revalidatePath('/');
-  revalidatePath('/admin/podcasts');
+  revalidatePath('/admin/playlists');
+  revalidateDiscovery();
   return { ok: true };
 }

@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic';
 export default async function AdminCommentsPage() {
   const supabase = await createClient();
 
-  // Admin RLS on comments (migration 013) already exposes every comment,
-  // including those on unpublished episodes.
+  // The admin RLS policy on comments already exposes every comment, including
+  // those on unpublished episodes — see comments_select in fullschema.sql.
   const { data } = await supabase
     .from('comments')
     .select(

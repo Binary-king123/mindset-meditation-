@@ -2,13 +2,14 @@
 // Audio lives in a PRIVATE R2 bucket; we mint short-lived presigned URLs for
 // upload (PUT) and playback (GET). The DB only stores the object key.
 import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-  CreateMultipartUploadCommand,
-  UploadPartCommand,
-  CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  GetObjectCommand,
+  ListPartsCommand,
+  PutObjectCommand,
+  S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -57,8 +58,8 @@ export function presignGetUrl(key: string, expiresIn = 3600): Promise<string> {
 // is what made large uploads crawl. Splitting the file into parts lets the
 // browser run several in parallel and retry just the part that failed.
 //
-// S3 requires every part except the last to be at least 5 MiB.
-export const MIN_PART_SIZE = 5 * 1024 * 1024;
+// S3 requires every part except the last to be at least 5 MiB, which the 8 MiB
+// part size below satisfies with room to spare.
 export const PART_SIZE = 8 * 1024 * 1024;
 /** Below this, one PUT is faster than the multipart handshake. */
 export const MULTIPART_THRESHOLD = PART_SIZE;
@@ -101,23 +102,59 @@ export async function startMultipart(
   return { uploadId, partUrls, partSize: PART_SIZE };
 }
 
-export async function completeMultipart(
+/**
+ * The parts R2 is actually holding for this upload, asked of R2 directly.
+ *
+ * The browser sees an ETag on each part response too — but only when the
+ * bucket's CORS policy lists ETag under ExposeHeaders. When it doesn't, the
+ * header is silently stripped from the browser's view and the upload dies at
+ * the very last step, after the entire file has already been transferred.
+ * Listing server-side is authoritative and needs no bucket configuration, so
+ * the upload works on a freshly created bucket.
+ *
+ * Paginated: S3 returns at most 1000 parts per page.
+ */
+async function listUploadedParts(
   key: string,
   uploadId: string,
-  parts: Array<{ partNumber: number; etag: string }>,
-): Promise<void> {
+): Promise<Array<{ PartNumber: number; ETag: string }>> {
+  const parts: Array<{ PartNumber: number; ETag: string }> = [];
+  let marker: string | undefined;
+
+  do {
+    const page = await r2().send(
+      new ListPartsCommand({
+        Bucket: bucket(),
+        Key: key,
+        UploadId: uploadId,
+        PartNumberMarker: marker,
+      }),
+    );
+    for (const part of page.Parts ?? []) {
+      if (part.PartNumber && part.ETag) {
+        parts.push({ PartNumber: part.PartNumber, ETag: part.ETag });
+      }
+    }
+    marker = page.IsTruncated ? page.NextPartNumberMarker : undefined;
+  } while (marker);
+
+  // S3 rejects an out-of-order manifest, and parts finish in whatever order
+  // the network allows.
+  return parts.sort((a, b) => a.PartNumber - b.PartNumber);
+}
+
+export async function completeMultipart(key: string, uploadId: string): Promise<void> {
+  const parts = await listUploadedParts(key, uploadId);
+  if (parts.length === 0) {
+    throw new Error('R2 is holding no parts for this upload — nothing to complete');
+  }
+
   await r2().send(
     new CompleteMultipartUploadCommand({
       Bucket: bucket(),
       Key: key,
       UploadId: uploadId,
-      MultipartUpload: {
-        // S3 rejects an out-of-order manifest, and the browser finishes parts
-        // in whatever order the network allows.
-        Parts: [...parts]
-          .sort((a, b) => a.partNumber - b.partNumber)
-          .map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
-      },
+      MultipartUpload: { Parts: parts },
     }),
   );
 }

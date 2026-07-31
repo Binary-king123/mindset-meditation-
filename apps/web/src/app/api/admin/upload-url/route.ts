@@ -1,3 +1,13 @@
+import { ADMIN_DENIAL_RESPONSE, checkAdmin } from '@/lib/admin-guard';
+import { AUDIO_BUCKET, audioBackend, encodeAudioPath } from '@/lib/audio-storage';
+import {
+  MULTIPART_THRESHOLD,
+  PART_SIZE,
+  abortMultipart,
+  completeMultipart,
+  presignPutUrl,
+  startMultipart,
+} from '@/lib/r2';
 // Tells the admin's browser where to put an audio file and how.
 //  - R2 configured, large file → a multipart upload: many presigned part URLs
 //                                the browser uploads in parallel
@@ -6,24 +16,15 @@
 //                                with the caller's own session (RLS allows it)
 // Admin-gated either way.
 import { type NextRequest, NextResponse } from 'next/server';
-import {
-  presignPutUrl,
-  startMultipart,
-  completeMultipart,
-  abortMultipart,
-  MULTIPART_THRESHOLD,
-  PART_SIZE,
-} from '@/lib/r2';
-import { AUDIO_BUCKET, audioBackend, encodeAudioPath } from '@/lib/audio-storage';
-import { checkAdmin, ADMIN_DENIAL_RESPONSE } from '@/lib/admin-guard';
 
 /** Object keys are minted here, never taken from the client. */
 function newKey(filename: unknown): string {
-  const ext = String(filename || '')
-    .split('.')
-    .pop()
-    ?.toLowerCase()
-    .replace(/[^a-z0-9]/g, '') || 'mp3';
+  const ext =
+    String(filename || '')
+      .split('.')
+      .pop()
+      ?.toLowerCase()
+      .replace(/[^a-z0-9]/g, '') || 'mp3';
   return `podcasts/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 }
 
@@ -62,9 +63,10 @@ export async function POST(req: NextRequest) {
         await abortMultipart(key, uploadId);
         return NextResponse.json({ ok: true });
       }
-      const parts = Array.isArray(body.parts) ? body.parts : [];
-      if (parts.length === 0) return fail('No parts to complete', 400);
-      await completeMultipart(key, uploadId, parts);
+      // No parts manifest from the client: completeMultipart asks R2 which
+      // parts it is holding, which works whether or not the bucket exposes the
+      // ETag header to the browser.
+      await completeMultipart(key, uploadId);
       return NextResponse.json({ ok: true, audioPath: encodeAudioPath('r2', key) });
     } catch (err) {
       return fail(err instanceof Error ? err.message : 'Could not finalise the upload');

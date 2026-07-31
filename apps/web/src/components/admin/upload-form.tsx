@@ -1,26 +1,18 @@
 'use client';
 
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
-import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Loader2,
-  UploadCloud,
-  Music,
-  Image as ImageIcon,
-  CheckCircle2,
-  Plus,
-  ListMusic,
-  X,
-  Check,
-} from 'lucide-react';
-import { toast } from 'sonner';
-import { createClient, type PodcastClient } from '@/lib/supabase/client';
-import { adminCreatePodcast, adminCreatePlaylist } from '@/app/actions';
-import { BUCKETS } from '@/lib/podcast';
-import { cn } from '@/lib/utils';
+import { adminCreatePlaylist, adminCreatePodcast } from '@/app/actions';
+import { CoverArtField } from '@/components/admin/cover-art-field';
 import { PlatformLinkFields } from '@/components/admin/platform-link-fields';
+import { SeoFields, type SeoOverrides } from '@/components/admin/seo-fields';
 import type { PlatformLinks } from '@/lib/platforms';
+import { BUCKETS } from '@/lib/podcast';
+import { type PodcastClient, createClient } from '@/lib/supabase/client';
+import { cn } from '@/lib/utils';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Check, CheckCircle2, ListMusic, Loader2, Music, Plus, UploadCloud, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { type FormEvent, type ReactNode, useState } from 'react';
+import { toast } from 'sonner';
 
 export const INPUT =
   'w-full px-4 py-3 bg-input border border-border rounded-xl text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-all';
@@ -29,39 +21,90 @@ export interface PlaylistOption {
   id: string;
   title: string;
 }
-export function randomPath(prefix: string, name: string) {
+function randomPath(prefix: string, name: string) {
   const ext = name.split('.').pop() || 'bin';
   return `${prefix}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 }
 
+/**
+ * Duration in whole seconds, read from the file's own metadata.
+ *
+ * This REJECTS on failure rather than resolving 0. It used to resolve 0, which
+ * the server then clamped to `Math.max(1, ...)` to satisfy the
+ * duration_seconds > 0 constraint — so a browser that could not parse the file
+ * silently published a "1 second" episode, and nothing anywhere surfaced it.
+ */
 export function readDuration(file: File): Promise<number> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const audio = document.createElement('audio');
     audio.preload = 'metadata';
+
+    const fail = (why: string) => {
+      URL.revokeObjectURL(url);
+      reject(
+        new Error(`Could not read the audio duration (${why}). Try re-exporting the file as MP3.`),
+      );
+    };
+
     audio.onloadedmetadata = () => {
+      const seconds = audio.duration;
       URL.revokeObjectURL(url);
-      resolve(Number.isFinite(audio.duration) ? Math.round(audio.duration) : 0);
+      if (!Number.isFinite(seconds) || seconds < 1) {
+        reject(new Error('That audio file reports no duration. Try re-exporting it as MP3.'));
+        return;
+      }
+      resolve(Math.round(seconds));
     };
-    audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(0);
-    };
+    audio.onerror = () => fail('the browser could not decode it');
     audio.src = url;
+  });
+}
+
+/**
+ * A tiny base64 JPEG for `next/image` placeholder="blur".
+ *
+ * Done on a canvas in the browser precisely so the server needs no image
+ * library: the file is already in memory for the upload, and a 16px-wide JPEG
+ * is well under the ~2 KB that inlining a data URL into HTML can justify.
+ * Returns null on any failure — a missing placeholder is cosmetic.
+ */
+export function readBlurDataUrl(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const w = 16;
+        const h = Math.max(1, Math.round((img.height / img.width) * w));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(null);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.5));
+      } catch {
+        resolve(null); // tainted canvas or an unsupported codec
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
   });
 }
 
 /**
  * PUT/POST a blob with real progress. fetch() can't report upload progress.
  *
- * Resolves with the response ETag, which multipart uploads need in order to
- * assemble the finished object. Reading it requires the bucket's CORS policy to
- * list ETag under ExposeHeaders — see SETUP.md.
- *
  * `onProgress` reports bytes rather than a percentage so callers running
  * several parts at once can sum them.
  */
-export function uploadWithProgress(
+function uploadWithProgress(
   url: string,
   body: Blob,
   opts: {
@@ -69,7 +112,7 @@ export function uploadWithProgress(
     headers: Record<string, string>;
     onProgress: (loadedBytes: number) => void;
   },
-): Promise<{ etag: string | null }> {
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(opts.method, url);
@@ -79,7 +122,7 @@ export function uploadWithProgress(
     };
     xhr.onload = () =>
       xhr.status >= 200 && xhr.status < 300
-        ? resolve({ etag: xhr.getResponseHeader('ETag') })
+        ? resolve()
         : reject(new Error(`Upload failed (${xhr.status}) ${xhr.responseText.slice(0, 140)}`));
     xhr.onerror = () =>
       reject(new Error('Network error during upload — check the storage bucket CORS settings'));
@@ -104,14 +147,13 @@ async function uploadParts(
   partUrls: string[],
   partSize: number,
   onProgress: (pct: number) => void,
-): Promise<Array<{ partNumber: number; etag: string }>> {
+): Promise<void> {
   const loaded = new Array<number>(partUrls.length).fill(0);
   const report = () => {
     const total = loaded.reduce((a, b) => a + b, 0);
     onProgress(Math.min(100, Math.round((total / file.size) * 100)));
   };
 
-  const results: Array<{ partNumber: number; etag: string }> = [];
   let next = 0;
 
   async function worker() {
@@ -123,7 +165,7 @@ async function uploadParts(
 
       for (let attempt = 0; ; attempt++) {
         try {
-          const { etag } = await uploadWithProgress(partUrls[index], chunk, {
+          await uploadWithProgress(partUrls[index], chunk, {
             method: 'PUT',
             // Content-Type is fixed by the signature; setting it per part would
             // invalidate it.
@@ -133,12 +175,10 @@ async function uploadParts(
               report();
             },
           });
-          if (!etag) {
-            throw new Error(
-              'The storage bucket did not expose the ETag header — add "ETag" to its CORS ExposeHeaders',
-            );
-          }
-          results.push({ partNumber: index + 1, etag });
+          // The part's ETag is deliberately not read here. A bucket that does
+          // not list ETag under CORS ExposeHeaders hides it from the browser,
+          // which used to fail the upload after the whole file had already
+          // transferred. The server asks R2 for the manifest instead.
           loaded[index] = chunk.size;
           report();
           return;
@@ -154,8 +194,6 @@ async function uploadParts(
   await Promise.all(
     Array.from({ length: Math.min(PART_CONCURRENCY, partUrls.length) }, () => worker()),
   );
-
-  return results;
 }
 
 /** The signed-in admin's token, for uploads that go straight to Supabase. */
@@ -217,7 +255,7 @@ export async function uploadAudio(
   if (presign.backend === 'r2' && presign.mode === 'multipart') {
     opts.onStatus('Uploading to Cloudflare R2 (parallel)…');
     try {
-      const parts = await uploadParts(file, presign.partUrls, presign.partSize, opts.onProgress);
+      await uploadParts(file, presign.partUrls, presign.partSize, opts.onProgress);
       opts.onStatus('Finalising upload…');
       const done = await fetch('/api/admin/upload-url', {
         method: 'POST',
@@ -226,7 +264,6 @@ export async function uploadAudio(
           action: 'complete',
           key: presign.key,
           uploadId: presign.uploadId,
-          parts,
         }),
       });
       const result = await done.json();
@@ -274,7 +311,11 @@ export async function uploadAudio(
   return presign.audioPath as string;
 }
 
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+export function Field({
+  label,
+  children,
+  hint,
+}: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="block">
       <span className="block text-sm font-semibold text-foreground mb-1.5">{label}</span>
@@ -417,7 +458,11 @@ export function ChipPicker({
                 disabled={saving}
                 className="px-4 py-3 bg-primary text-white rounded-xl font-semibold disabled:opacity-50 flex items-center gap-2 shrink-0"
               >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                {saving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Plus className="w-4 h-4" />
+                )}
                 Create
               </button>
               <button
@@ -498,7 +543,7 @@ export function UploadForm({
   const [playlistId, setPlaylistId] = useState(
     defaultPlaylistId && initialPlaylists.some((p) => p.id === defaultPlaylistId)
       ? defaultPlaylistId
-      : initialPlaylists[0]?.id ?? '',
+      : (initialPlaylists[0]?.id ?? ''),
   );
   const [audio, setAudio] = useState<File | null>(null);
   const [cover, setCover] = useState<File | null>(null);
@@ -507,6 +552,11 @@ export function UploadForm({
   const [pct, setPct] = useState(0);
   const [done, setDone] = useState<string | null>(null);
   const [platformLinks, setPlatformLinks] = useState<PlatformLinks>({});
+  // Blank means "use the generated value" — see components/admin/seo-fields.tsx.
+  const [seo, setSeo] = useState<SeoOverrides>({ metaDescription: '', keywords: '' });
+  // Read as soon as an audio file is picked so the SEO preview can quote a real
+  // length rather than waiting until submit.
+  const [audioDuration, setAudioDuration] = useState(0);
 
   function reset() {
     setDone(null);
@@ -550,7 +600,12 @@ export function UploadForm({
     setPct(0);
     try {
       setProgress('Reading audio…');
-      const duration = await readDuration(audio);
+      // Rejects rather than returning 0, so a file whose duration cannot be
+      // read fails loudly here instead of publishing as a 1-second episode.
+      const [duration, blurDataUrl] = await Promise.all([
+        readDuration(audio),
+        cover ? readBlurDataUrl(cover) : Promise.resolve(null),
+      ]);
 
       // The cover is small and goes to a different bucket, so there is no
       // reason to make it wait for the audio the way it used to.
@@ -573,6 +628,15 @@ export function UploadForm({
         audioPath,
         coverUrl: coverResult.url,
         coverPath: coverResult.path,
+        fileSizeBytes: audio.size,
+        blurDataUrl,
+        metaDescription: seo.metaDescription.trim() || undefined,
+        keywords: seo.keywords
+          ? seo.keywords
+              .split(',')
+              .map((k) => k.trim())
+              .filter(Boolean)
+          : undefined,
         platformLinks,
         publish,
       });
@@ -605,7 +669,7 @@ export function UploadForm({
           </button>
           <button
             type="button"
-            onClick={() => router.push('/admin/podcasts')}
+            onClick={() => router.push('/admin/playlists')}
             className="press px-5 py-2.5 glass-card rounded-full font-semibold"
           >
             Manage podcasts
@@ -626,28 +690,6 @@ export function UploadForm({
         />
       </Field>
 
-      <Field label="Channel / Host">
-        <input
-          value={channel}
-          onChange={(e) => setChannel(e.target.value)}
-          className={INPUT}
-          placeholder="e.g. Rahul S."
-        />
-      </Field>
-
-      <Field
-        label="Description"
-        hint="Shown on the episode page and used as the meta description for search engines."
-      >
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={4}
-          className={INPUT}
-          placeholder="What's this session about? Who is it for?"
-        />
-      </Field>
-
       <ChipPicker
         label="Playlist"
         required
@@ -665,30 +707,76 @@ export function UploadForm({
           icon={<Music className="w-5 h-5" />}
           accept="audio/*"
           file={audio}
-          onChange={setAudio}
+          onChange={(f) => {
+            setAudio(f);
+            setAudioDuration(0);
+            if (f)
+              readDuration(f)
+                .then(setAudioDuration)
+                .catch(() => setAudioDuration(0));
+          }}
           hint="MP3, up to 200MB"
         />
       </Field>
 
       <Field label="Cover logo (optional)">
-        <FileInput
-          icon={<ImageIcon className="w-5 h-5" />}
-          accept="image/*"
-          file={cover}
-          onChange={setCover}
-          hint="JPG / PNG / WebP, up to 5MB"
-        />
+        <CoverArtField file={cover} onChange={setCover} />
       </Field>
 
-      <div className="pt-2">
-        <h2 className="text-sm font-bold text-foreground mb-1">Links for this episode</h2>
-        <p className="text-xs text-muted-foreground mb-4">
-          Optional. Paste the direct URL for this episode on each app — listeners get those
-          buttons under the audio. Leave a field empty and it falls back to the show-wide link
-          from <span className="text-foreground font-medium">Links</span>.
-        </p>
-        <PlatformLinkFields value={platformLinks} onChange={setPlatformLinks} />
-      </div>
+      <SeoFields
+        title={title}
+        playlistTitle={playlists.find((p) => p.id === playlistId)?.title ?? null}
+        description={description}
+        durationSeconds={audioDuration}
+        overrides={seo}
+        onChange={setSeo}
+      />
+
+      {/* Everything below is generated from the four fields above when left
+          blank — see lib/seo/generate.ts. The inputs stay available because a
+          hand-written description is always better than a generated one, and
+          the generators defer to whatever is typed here. */}
+      <details className="rounded-2xl border border-border bg-card/40 px-4 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-foreground marker:text-muted-foreground">
+          Advanced — optional
+          <span className="ml-2 font-normal text-xs text-muted-foreground">
+            description, host and per-episode links are auto-generated if you skip them
+          </span>
+        </summary>
+        <div className="space-y-6 pt-5">
+          <Field label="Channel / Host">
+            <input
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              className={INPUT}
+              placeholder="e.g. Rahul S."
+            />
+          </Field>
+
+          <Field
+            label="Description"
+            hint="Shown on the episode page and used as the meta description for search engines."
+          >
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={4}
+              className={INPUT}
+              placeholder="What's this session about? Who is it for?"
+            />
+          </Field>
+
+          <div className="pt-2">
+            <h2 className="text-sm font-bold text-foreground mb-1">Links for this episode</h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              Optional. Paste the direct URL for this episode on each app — listeners get those
+              buttons under the audio. Leave a field empty and it falls back to the show-wide link
+              from <span className="text-foreground font-medium">Links</span>.
+            </p>
+            <PlatformLinkFields value={platformLinks} onChange={setPlatformLinks} />
+          </div>
+        </div>
+      </details>
 
       {progress && (
         <div className="space-y-2">

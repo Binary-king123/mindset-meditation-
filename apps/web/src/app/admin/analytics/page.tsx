@@ -49,10 +49,20 @@ export default async function AnalyticsPage() {
     comment_count: number;
   }>;
 
-  // Fetch per-episode statistics
+  // Per-episode retention, computed from the last 90 days of play events.
+  //
+  // This used to select the entire play_events table with no filter, no
+  // pagination and no server-side aggregation, then reduce it in JS — which
+  // silently truncates at PostgREST's row cap (1000 by default) and gets slower
+  // every day the podcast is live. A date window plus an explicit cap keeps it
+  // bounded; retention over a rolling quarter is also the more useful figure.
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
   const { data: perTrack } = await supabase
     .from('play_events')
-    .select('track_id, listened_seconds, duration_seconds');
+    .select('track_id, listened_seconds, duration_seconds')
+    .gte('created_at', ninetyDaysAgo)
+    .order('created_at', { ascending: false })
+    .limit(10000);
 
   const byTrack = new Map<string, { views: number; listened: number; total: number }>();
   for (const e of (perTrack ?? []) as Array<{
@@ -77,10 +87,14 @@ export default async function AnalyticsPage() {
   const avgRetention = stats.retention ?? 50;
   const followersTotal = profilesCount ?? 0;
   const commentsTotal = commentsCount ?? 0;
-  
-  // Simulated Ads metrics (since there is no native ads schema, we represent ad analytics beautifully)
-  const adsRunTotal = Math.round(totalViews * 1.8); 
-  const adRevenueEst = (adsRunTotal * 0.05).toFixed(2);
+
+  // "Ads Played" and "Est. Ad Revenue" used to live here as
+  // `totalViews * 1.8` and `ads * $0.05` — invented numbers rendered in the
+  // same style as the real ones, with nothing on screen marking them as
+  // estimates. There is no ads schema, so there is no figure to show; the card
+  // now reports unique listeners, which play_events actually measures.
+  const uniqueListeners = stats.unique_listeners ?? 0;
+  const signedInListeners = stats.signed_in ?? 0;
 
   return (
     <div className="space-y-10">
@@ -197,22 +211,27 @@ export default async function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Card 4: Ads Run */}
+        {/* Card 4: Unique listeners — a real figure from play_events, counting
+            distinct users and anonymous session ids. */}
         <div className="glass-card rounded-[2rem] p-6 relative overflow-hidden flex flex-col justify-between h-48 border border-white/10">
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-white/50">Ads Played</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-white/50">
+                Unique Listeners
+              </span>
               <span className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
                 <Radio className="w-4 h-4" />
               </span>
             </div>
             <p className="text-3xl font-black text-white" style={{ fontFamily: 'var(--font-outfit)' }}>
-              {adsRunTotal.toLocaleString()}
+              {uniqueListeners.toLocaleString()}
             </p>
           </div>
           <div className="flex items-center justify-between text-xs text-white/60 mt-4 border-t border-white/5 pt-3">
-            <span>Est. Ad Revenue</span>
-            <span className="text-emerald-400 font-bold">${adRevenueEst}</span>
+            <span>Signed in</span>
+            <span className="text-emerald-400 font-bold">
+              {signedInListeners.toLocaleString()}
+            </span>
           </div>
         </div>
 
