@@ -1,39 +1,43 @@
-import type { Metadata } from 'next';
-import Link from 'next/link';
-import Image from 'next/image';
+import { NowPlayingCard } from '@/components/home/now-playing-card';
+import { Footer } from '@/components/layout/footer';
+import { Navbar } from '@/components/layout/navbar';
+import { AudioPlayer } from '@/components/player/audio-player-lazy';
+import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
+import { BRAND } from '@/lib/brand';
+import { FALLBACK_COVER_GRADIENT } from '@/lib/fallback-cover';
+import { HARDCODED_PLATFORMS, type ResolvedPlatform } from '@/lib/platforms';
+import {
+  type DatedEpisode,
+  type EpisodeSummary,
+  PODCAST_SELECT,
+  formatDuration,
+} from '@/lib/podcast';
+import {
+  JsonLd,
+  breadcrumbLd,
+  organizationLd,
+  pageMetadata,
+  podcastSeriesLd,
+  siteNavigationLd,
+  webSiteLd,
+} from '@/lib/seo';
+import { getShow } from '@/lib/show';
+import { createPublicClient } from '@/lib/supabase/public';
 import {
   ArrowRight,
   BadgeCheck,
   ExternalLink,
   Flower2,
+  Headphones,
   Play,
   Radio,
   ShieldCheck,
   Signal,
+  Sparkles,
 } from 'lucide-react';
-import { Navbar } from '@/components/layout/navbar';
-import { Footer } from '@/components/layout/footer';
-import { AudioPlayer } from '@/components/player/audio-player';
-import { NowPlayingCard } from '@/components/home/now-playing-card';
-import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
-import { createPublicClient } from '@/lib/supabase/public';
-import {
-  PODCAST_SELECT,
-  formatDuration,
-  type DatedEpisode,
-  type EpisodeSummary,
-} from '@/lib/podcast';
-import { getShow } from '@/lib/show';
-import { type ResolvedPlatform, HARDCODED_PLATFORMS } from '@/lib/platforms';
-import {
-  JsonLd,
-  pageMetadata,
-  organizationLd,
-  webSiteLd,
-  podcastSeriesLd,
-  siteNavigationLd,
-  breadcrumbLd,
-} from '@/lib/seo';
+import type { Metadata } from 'next';
+import Image from 'next/image';
+import Link from 'next/link';
 
 export const revalidate = 300;
 
@@ -49,39 +53,6 @@ const HERO_PROOF = [
 ];
 
 const EPISODE_BADGES = ['Sleep', 'Mindfulness', 'Relaxation'];
-
-const DEMO_EPISODES: DatedEpisode[] = [
-  {
-    id: 'demo-1',
-    title: 'Morning Calm Meditation',
-    slug: 'playlists',
-    thumbnail_url: '/playlist-fallback-1.png',
-    short_description: 'Ease into the day with a peaceful guided breathing session.',
-    duration_seconds: 133,
-    instructor_name: null,
-    created_at: '2026-07-22T00:00:00.000Z',
-  },
-  {
-    id: 'demo-2',
-    title: 'Still Water Relaxation',
-    slug: 'playlists',
-    thumbnail_url: '/playlist-fallback-2.jpeg',
-    short_description: 'Soft meditation audio inspired by quiet lakes and slow sunrise light.',
-    duration_seconds: 281,
-    instructor_name: null,
-    created_at: '2026-07-21T00:00:00.000Z',
-  },
-  {
-    id: 'demo-3',
-    title: 'Nature Path Mindfulness',
-    slug: 'playlists',
-    thumbnail_url: '/playlist-fallback-3.jpeg',
-    short_description: 'A grounding mindfulness practice shaped around walking, breath, and focus.',
-    duration_seconds: 356,
-    instructor_name: null,
-    created_at: '2026-07-20T00:00:00.000Z',
-  },
-];
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -143,7 +114,12 @@ function ListenCard({ platform }: { platform: ResolvedPlatform }) {
           className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-foreground/10 sm:h-12 sm:w-12"
           style={{ background: `linear-gradient(135deg, ${platform.color}25, transparent)` }}
         >
-          <svg viewBox="0 0 24 24" fill={platform.color} className="h-6 w-6 sm:h-7 sm:w-7" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            fill={platform.color}
+            className="h-6 w-6 sm:h-7 sm:w-7"
+            aria-hidden="true"
+          >
             <path d={platform.path} />
           </svg>
         </div>
@@ -175,7 +151,7 @@ function EpisodeCard({ episode, badge }: { episode: DatedEpisode; badge: string 
             className="object-cover transition-transform duration-700 group-hover:scale-105"
           />
         ) : (
-          <div className="h-full w-full bg-gradient-to-br from-[hsl(var(--aura-1))] to-[hsl(var(--aura-2))]" />
+          <div className="h-full w-full" style={{ background: FALLBACK_COVER_GRADIENT }} />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
         <span className="absolute bottom-2.5 left-2.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white/95 backdrop-blur-md sm:bottom-3 sm:left-3">
@@ -248,23 +224,39 @@ export default async function HomePage() {
       .limit(6),
   ]);
 
-  const latestEpisodes = (latestRows ?? []) as DatedEpisode[];
-  // With nothing published the page still has to look finished, so it falls
-  // back to demo cards — but the hero player is told it cannot stream them.
-  const hasLiveEpisodes = latestEpisodes.length > 0;
-  const episodesToShow = hasLiveEpisodes ? latestEpisodes : DEMO_EPISODES;
+  // Only real, published episodes are ever rendered. There used to be three
+  // hardcoded demo episodes here as filler; every one carried slug 'playlists',
+  // so each card linked to /podcast/playlists (a 404) and the same fake URL was
+  // written three times into the PodcastSeries JSON-LD. An empty catalogue now
+  // shows an empty state, and one published episode shows that episode.
+  const episodesToShow = (latestRows ?? []) as DatedEpisode[];
+  const latestEpisodes = episodesToShow;
+  const hasLiveEpisodes = episodesToShow.length > 0;
+
   const heroEpisode = episodesToShow[0];
   const platforms = HARDCODED_PLATFORMS;
 
-  const heroTrack: EpisodeSummary = {
-    id: heroEpisode.id,
-    title: heroEpisode.title,
-    slug: heroEpisode.slug,
-    thumbnail_url: heroEpisode.thumbnail_url,
-    short_description: heroEpisode.short_description,
-    duration_seconds: heroEpisode.duration_seconds,
-    instructor_name: heroEpisode.instructor_name,
-  };
+  // The player panel always renders — it is the page's centrepiece — so with no
+  // episode at all it falls back to the show itself, unplayable.
+  const heroTrack: EpisodeSummary = heroEpisode
+    ? {
+        id: heroEpisode.id,
+        title: heroEpisode.title,
+        slug: heroEpisode.slug,
+        thumbnail_url: heroEpisode.thumbnail_url,
+        short_description: heroEpisode.short_description,
+        duration_seconds: heroEpisode.duration_seconds,
+        instructor_name: heroEpisode.instructor_name,
+      }
+    : {
+        id: 'placeholder',
+        title: show.name,
+        slug: '',
+        thumbnail_url: null,
+        short_description: null,
+        duration_seconds: 0,
+        instructor_name: null,
+      };
 
   return (
     <div className="stream-shell flex min-h-screen flex-col">
@@ -277,7 +269,9 @@ export default async function HomePage() {
             description: show.description,
             coverUrl: show.coverUrl,
             platforms,
-            episodes: episodesToShow.map((episode) => ({
+            // latestEpisodes, never episodesToShow: a demo card in here
+            // advertises a URL that 404s to every crawler that reads it.
+            episodes: latestEpisodes.map((episode) => ({
               title: episode.title,
               slug: episode.slug,
             })),
@@ -291,13 +285,18 @@ export default async function HomePage() {
 
       <Navbar />
 
-      {/* The global player docks to the bottom edge, so the last section needs
-          room to clear it on phones where it is full-width. */}
-      <main className="flex-1 pb-28 sm:pb-32">
+      {/* The global player used to need a full 112–128px of bottom clearance
+          reserved here for phones, where it docks full-width — but the Footer
+          always follows this main content and its own height clears the
+          player by a wide margin on its own. That reservation had become a
+          permanent, oversized gap between the About section and the footer.
+          Cutting it to zero closed the gap to nothing, so this is a small,
+          deliberate one instead — not clearance math, just breathing room. */}
+      <main className="flex-1 pb-6 sm:pb-8">
         {/* ============================ HERO ============================ */}
         <section
           id="home"
-          className="relative overflow-hidden px-4 pb-12 pt-24 sm:px-6 sm:pb-16 sm:pt-32 lg:px-8 lg:pb-20 lg:pt-36"
+          className="relative overflow-hidden px-4 pb-8 pt-24 sm:px-6 sm:pb-10 sm:pt-32 lg:px-8 lg:pb-14 lg:pt-36"
         >
           <div
             className="pointer-events-none absolute -left-32 -top-32 h-[26rem] w-[26rem] rounded-full bg-primary/15 blur-[130px] sm:h-[38rem] sm:w-[38rem] sm:blur-[150px]"
@@ -309,7 +308,7 @@ export default async function HomePage() {
           />
 
           <div className="relative z-10 mx-auto w-full max-w-7xl">
-            <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_minmax(0,25rem)] lg:gap-12 xl:gap-16">
+            <div className="grid items-center gap-10 lg:grid-cols-[1fr_0.95fr] lg:gap-12 xl:gap-16">
               {/* --- Copy ---
                   Second on phones: the player is the thing people came for, so
                   it leads and the pitch follows. On lg the two sit side by side
@@ -366,7 +365,7 @@ export default async function HomePage() {
                             {label}
                           </span>
                         </div>
-                        <p className="mt-1 pl-6 text-[11px] text-foreground/40">{detail}</p>
+                        <p className="mt-1 pl-6 text-xs text-foreground/40">{detail}</p>
                       </li>
                     ))}
                   </ul>
@@ -376,13 +375,7 @@ export default async function HomePage() {
               {/* --- Now playing --- */}
               <Reveal direction="scale" className="order-1 min-w-0 lg:order-2">
                 <div className="mx-auto w-full max-w-[24rem] lg:mx-0 lg:ml-auto lg:max-w-none">
-                  <NowPlayingCard
-                    track={heroTrack}
-                    queue={hasLiveEpisodes ? latestEpisodes : []}
-                    showName={show.name}
-                    cover="/hero-top.png"
-                    playable={hasLiveEpisodes}
-                  />
+                  <NowPlayingCard track={heroTrack} showName={show.name} cover="/hero-top.png" />
                 </div>
               </Reveal>
             </div>
@@ -392,7 +385,7 @@ export default async function HomePage() {
         {/* ======================= LISTEN ANYWHERE ======================= */}
         <section
           id="listen-anywhere"
-          className="relative overflow-hidden px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20"
+          className="relative overflow-hidden px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-14"
         >
           <div
             className="pointer-events-none absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/8 blur-[140px] sm:h-[38rem] sm:w-[38rem] sm:blur-[160px]"
@@ -426,7 +419,7 @@ export default async function HomePage() {
         {/* ========================== EPISODES ========================== */}
         <section
           id="episodes"
-          className="relative overflow-hidden px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20"
+          className="relative overflow-hidden px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-14"
         >
           <div
             className="pointer-events-none absolute -left-24 top-1/3 h-[24rem] w-[24rem] rounded-full bg-[hsl(var(--aura-2)/0.12)] blur-[130px] sm:h-[32rem] sm:w-[32rem] sm:blur-[140px]"
@@ -439,7 +432,10 @@ export default async function HomePage() {
                 eyebrow="Fresh This Week"
                 title="Latest Episodes"
                 subtitle="New meditation sessions for your mind, body and soul."
-                action={{ href: '/playlists', label: 'View all' }}
+                // /episodes, not /playlists: this section lists episodes, so
+                // "view all" has to mean all episodes. A playlist is a series,
+                // which is a different question.
+                action={{ href: '/episodes', label: 'View all' }}
               />
             </Reveal>
 
@@ -460,13 +456,26 @@ export default async function HomePage() {
                 </RevealItem>
               ))}
             </RevealGroup>
+
+            {episodesToShow.length === 0 && (
+              <div className="mt-7 rounded-2xl border border-border bg-card/40 p-10 text-center lg:mt-9">
+                <Headphones className="mx-auto h-10 w-10 text-muted-foreground" />
+                <h3 className="mt-4 text-lg font-bold text-foreground">
+                  The first episodes are on their way
+                </h3>
+                <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+                  Follow the show on your favourite app and the next release will land in your feed
+                  automatically.
+                </p>
+              </div>
+            )}
           </div>
         </section>
 
         {/* ============================ ABOUT ============================ */}
         <section
           id="about"
-          className="relative overflow-hidden px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20"
+          className="relative overflow-hidden px-4 pb-4 pt-8 sm:px-6 sm:pb-5 sm:pt-10 lg:px-8 lg:pb-6 lg:pt-14"
         >
           <div
             className="pointer-events-none absolute bottom-0 right-0 h-[24rem] w-[24rem] rounded-full bg-primary/12 blur-[140px] sm:h-[32rem] sm:w-[32rem] sm:blur-[150px]"
@@ -476,16 +485,75 @@ export default async function HomePage() {
           <div className="relative z-10 mx-auto max-w-7xl">
             <Reveal>
               <div className="stream-panel overflow-hidden rounded-[1.75rem] p-5 sm:rounded-[2rem] sm:p-8 lg:p-10">
-                <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_1fr] lg:items-center lg:gap-10">
-                  <div className="relative aspect-[16/10] w-full overflow-hidden rounded-2xl border border-foreground/8 bg-black/20 sm:aspect-[2/1] lg:aspect-[4/3]">
-                    <Image
-                      src="/hero-bottom.png"
-                      alt="A person meditating at sunrise"
-                      fill
-                      sizes="(max-width: 1024px) 92vw, 320px"
-                      className="object-cover"
-                    />
-                  </div>
+                <div className="grid gap-10 lg:grid-cols-[minmax(0,22rem)_1fr] lg:items-center lg:gap-12">
+                  {/* hero-bottom.png stays — it's the second half of the same
+                      illustrated pair as hero-top.png in the player card above.
+                      Framed like a physical pane of frosted glass rather than a
+                      bordered photo: a translucent, blurred mat around the
+                      image with a bright inset line along the top where light
+                      would catch a real glass edge — the same recipe as
+                      `.stream-panel` elsewhere on this page, just built by hand
+                      here because the shape (image inset within a frame) isn't
+                      a plain rounded box. No icon sits on the photo itself; the
+                      show's mark stays where it already lived, next to the
+                      heading. A floating glass caption takes its place instead,
+                      plus a couple of small glass motes drifting near the
+                      frame — "more elements" without another icon-on-photo. */}
+                  <Reveal direction="scale" duration={0.8}>
+                    <div className="group relative mx-auto w-full max-w-[24rem] pb-7 lg:mx-0 lg:max-w-none">
+                      <div
+                        aria-hidden
+                        className="breathe pointer-events-none absolute -inset-6 rounded-[2.5rem] bg-[radial-gradient(60%_60%_at_30%_20%,hsl(var(--aura-1)/0.35),transparent_70%)] blur-2xl"
+                      />
+                      <div
+                        aria-hidden
+                        className="pointer-events-none absolute -inset-6 rounded-[2.5rem] bg-[radial-gradient(55%_55%_at_80%_85%,hsl(var(--aura-4)/0.3),transparent_70%)] blur-2xl"
+                      />
+
+                      {/* Small glass motes drifting around the frame. */}
+                      <div
+                        aria-hidden
+                        className="float-slow pointer-events-none absolute -left-4 top-10 hidden h-9 w-9 rounded-full border border-white/25 bg-white/10 shadow-lg backdrop-blur-md sm:block"
+                      />
+                      <div
+                        aria-hidden
+                        className="breathe pointer-events-none absolute -right-2 top-1/2 hidden h-5 w-5 rounded-full border border-white/25 bg-white/15 shadow-lg backdrop-blur-md sm:block"
+                      />
+
+                      {/* The glass frame: a blurred, translucent mat around the
+                          photo, with an inset top highlight standing in for
+                          light on a glass edge. `.shine` (already used on
+                          buttons site-wide) sweeps a reflection across it on
+                          hover — the same trick, borrowed for a pane rather
+                          than a pill. */}
+                      <div className="shine relative rounded-[1.75rem] border border-white/15 bg-gradient-to-b from-white/[0.1] to-white/[0.03] p-2 shadow-[0_35px_80px_-30px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-xl transition-transform duration-500 ease-smooth motion-safe:group-hover:-translate-y-1 sm:p-2.5">
+                        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[1.25rem] sm:aspect-[16/11] lg:aspect-[4/3]">
+                          <Image
+                            src="/hero-bottom.png"
+                            alt="A silhouette meditating at sunset beside a glowing lotus"
+                            fill
+                            sizes="(max-width: 1024px) 90vw, 380px"
+                            className="object-cover transition-transform duration-700 ease-smooth motion-safe:group-hover:scale-[1.03]"
+                          />
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-background/35 via-transparent to-transparent" />
+                        </div>
+                      </div>
+
+                      {/* A floating glass caption, in place of the old badge —
+                          real copy (the brand's own tagline) rather than a
+                          bare icon. */}
+                      <div className="absolute -bottom-1 left-1/2 w-[88%] -translate-x-1/2 sm:-bottom-2">
+                        <div className="flex items-center gap-2.5 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 shadow-[0_20px_45px_-18px_rgba(0,0,0,0.65)] backdrop-blur-xl">
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/20">
+                            <Sparkles className="h-4 w-4 text-primary" />
+                          </span>
+                          <p className="min-w-0 text-xs font-semibold leading-snug text-foreground/90 sm:text-sm">
+                            {BRAND.tagline}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </Reveal>
 
                   <div className="min-w-0 text-center lg:text-left">
                     <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-primary/30 bg-gradient-to-br from-[hsl(var(--aura-4)/0.22)] to-[hsl(var(--aura-1)/0.3)] shadow-[0_0_50px_hsl(var(--glow)/0.18)] lg:mx-0">
@@ -499,8 +567,8 @@ export default async function HomePage() {
                       Meditation for a Better You
                     </h2>
                     <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-foreground/55 sm:text-base lg:mx-0">
-                      The Mindset Meditation Podcast is here to help you relax, improve sleep, reduce
-                      stress and build a mindful life.
+                      The Mindset Meditation Podcast is here to help you relax, improve sleep,
+                      reduce stress and build a mindful life.
                     </p>
 
                     <ul className="mt-6 flex flex-col items-center gap-2.5 text-xs text-foreground/50 sm:flex-row sm:flex-wrap sm:justify-center sm:gap-x-6 sm:text-sm lg:justify-start">

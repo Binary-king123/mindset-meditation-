@@ -3,13 +3,18 @@ import Link from 'next/link';
 import { ListMusic, ArrowRight, Heart } from 'lucide-react';
 import { Navbar } from '@/components/layout/navbar';
 import { Footer } from '@/components/layout/footer';
-import { AudioPlayer } from '@/components/player/audio-player';
+import { AudioPlayer } from '@/components/player/audio-player-lazy';
 import { PlaylistCard } from '@/components/playlist/playlist-card';
 import {PodcastCard} from '@/components/podcast/podcast-card';
 
 import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
 import { createClient } from '@/lib/supabase/server';
-import { DEMO_PLAYLISTS, PLAYLIST_SELECT, PODCAST_SELECT, type PlaylistSummary, type EpisodeSummary } from '@/lib/podcast';
+import {
+  PLAYLIST_SELECT,
+  PODCAST_SELECT,
+  type PlaylistSummary,
+  type EpisodeSummary,
+} from '@/lib/podcast';
 import { JsonLd, pageMetadata, itemListLd, breadcrumbLd } from '@/lib/seo';
 
 export const metadata: Metadata = pageMetadata({
@@ -44,7 +49,11 @@ export default async function PlaylistsPage({
     .order('created_at', { ascending: false });
 
   const playlists = (playlistsData ?? []) as PlaylistSummary[];
-  const playlistsToShow = [...playlists, ...DEMO_PLAYLISTS.slice(0, Math.max(0, 3 - playlists.length))];
+  // Real playlists only. This used to pad the list up to three with hardcoded
+  // demo entries that all carried slug 'playlists', so every one of them linked
+  // to /playlist/playlists — a 404 — and fed the same dead URL to the ItemList
+  // structured data on this page.
+  const playlistsToShow = playlists;
 
   // Fetch Saved sessions (Favorites)
   let savedTracks: EpisodeSummary[] = [];
@@ -71,7 +80,10 @@ export default async function PlaylistsPage({
           ...(playlistsToShow.length
             ? [
                 itemListLd(
-                  playlistsToShow.map((p) => ({ name: p.title, path: p.slug === 'playlists' ? '/playlists' : `/playlist/${p.slug}` })),
+                  // The `slug === 'playlists'` special case that used to be
+                  // here existed only to stop demo playlists emitting a dead
+                  // /playlist/playlists URL. Every row is real now.
+                  playlistsToShow.map((p) => ({ name: p.title, path: `/playlist/${p.slug}` })),
                   'Guided meditation playlists',
                 ),
               ]
@@ -211,9 +223,9 @@ export default async function PlaylistsPage({
             stagger={0.06}
             className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-5"
           >
-            {playlistsToShow.map((p, index) => (
+            {playlistsToShow.map((p) => (
               <RevealItem key={p.id}>
-                <PlaylistCard playlist={p} fallbackIndex={index} />
+                <PlaylistCard playlist={p} />
               </RevealItem>
             ))}
           </RevealGroup>

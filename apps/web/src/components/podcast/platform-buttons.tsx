@@ -38,7 +38,9 @@ export function PlatformButtons({
               'border-border bg-card/70 backdrop-blur text-foreground',
               'hover:border-[var(--brand)] hover:shadow-[0_10px_28px_-12px_var(--brand)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-              variant === 'compact' ? 'p-2.5 sm:px-4 sm:py-2.5 gap-0 sm:gap-2 text-sm' : 'p-3.5 sm:px-5 sm:py-3 gap-0 sm:gap-2.5 text-sm',
+              variant === 'compact'
+                ? 'p-2.5 sm:px-4 sm:py-2.5 gap-0 sm:gap-2 text-sm'
+                : 'p-3.5 sm:px-5 sm:py-3 gap-0 sm:gap-2.5 text-sm',
               variant === 'list' && 'w-full px-5 py-3.5 gap-2.5',
             )}
           >

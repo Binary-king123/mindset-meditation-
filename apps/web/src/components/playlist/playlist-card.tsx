@@ -2,35 +2,17 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { motion } from 'framer-motion';
 import { ListMusic, Play } from 'lucide-react';
 import { formatPlaylistMeta, type PlaylistSummary } from '@/lib/podcast';
-
-const PLAYLIST_FALLBACKS = [
-  '/playlist-fallback-1.png',
-  '/playlist-fallback-2.jpeg',
-  '/playlist-fallback-3.jpeg',
-] as const;
+import { FALLBACK_COVER_GRADIENT } from '@/lib/fallback-cover';
 
 /**
  * Playlist tile with the stacked-cards look that signals "this is a set, not a
  * single episode" — the same visual cue YouTube uses.
  */
-export function PlaylistCard({
-  playlist,
-  fallbackIndex = 0,
-}: {
-  playlist: PlaylistSummary;
-  fallbackIndex?: number;
-}) {
-  const artwork = playlist.thumbnail_url || PLAYLIST_FALLBACKS[fallbackIndex % PLAYLIST_FALLBACKS.length];
-
+export function PlaylistCard({ playlist }: { playlist: PlaylistSummary }) {
   return (
-    <motion.article
-      whileHover={{ y: -6 }}
-      transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-      className="group relative"
-    >
+    <article className="group relative">
       <Link href={`/playlist/${playlist.slug}`} className="block">
         {/* Offset layers peeking out behind the cover */}
         <div className="relative pt-2.5 px-2.5">
@@ -45,18 +27,22 @@ export function PlaylistCard({
 
           <div className="gradient-ring relative rounded-2xl overflow-hidden glass-card">
             <div className="relative aspect-square overflow-hidden">
-              <Image
-                src={artwork}
-                alt={playlist.title}
-                fill
-                className="object-cover transition-transform duration-slow ease-smooth group-hover:scale-110"
-                sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-              />
+              {playlist.thumbnail_url ? (
+                <Image
+                  src={playlist.thumbnail_url}
+                  alt={playlist.title}
+                  fill
+                  className="object-cover transition-transform duration-slow ease-smooth group-hover:scale-110"
+                  sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                />
+              ) : (
+                <div className="h-full w-full" style={{ background: FALLBACK_COVER_GRADIENT }} />
+              )}
 
               <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent opacity-75 group-hover:opacity-95 transition-opacity duration-500" />
 
               {/* Count badge, bottom-right like a playlist chip */}
-              <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold text-white bg-black/55 backdrop-blur-md border border-white/15">
+              <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold text-white bg-black/55 backdrop-blur-md border border-white/15">
                 <ListMusic className="w-3 h-3" />
                 {playlist.track_count}
               </span>
@@ -77,6 +63,6 @@ export function PlaylistCard({
           </div>
         </div>
       </Link>
-    </motion.article>
+    </article>
   );
 }

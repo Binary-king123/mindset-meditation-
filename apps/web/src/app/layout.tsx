@@ -3,7 +3,7 @@ import { Inter, Outfit } from 'next/font/google';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { AuthProvider } from '@/components/providers/auth-provider';
 import { AudioPlayerProvider } from '@/components/providers/audio-player-provider';
-import { Toaster } from 'sonner';
+import { AppToaster } from '@/components/providers/app-toaster';
 import { BRAND } from '@/lib/brand';
 import './globals.css';
 
@@ -80,11 +80,11 @@ export default function RootLayout({
             in the app dynamic. */}
       </head>
       <body>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange={false}>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange={false}>
           <AuthProvider>
             <AudioPlayerProvider>
               {children}
-              <Toaster position="bottom-right" theme="system" richColors closeButton />
+              <AppToaster />
             </AudioPlayerProvider>
           </AuthProvider>
         </ThemeProvider>

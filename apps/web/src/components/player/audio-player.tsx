@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import {
@@ -10,7 +10,7 @@ import {
 import { toast } from 'sonner';
 import { usePlayerStore } from '@/store/player.store';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
-import { toggleSave } from '@/app/actions';
+import { toggleSave, isSaved } from '@/app/actions';
 import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
 
@@ -33,6 +33,20 @@ export function AudioPlayer() {
   const [showQueue, setShowQueue] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showSleepMenu, setShowSleepMenu] = useState(false);
+
+  // Load the real saved state for whatever is playing. Without this the heart
+  // renders empty for an already-saved episode and the first press unsaves it.
+  const playingId = store.currentTrack?.id;
+  useEffect(() => {
+    if (!playingId) return;
+    let cancelled = false;
+    isSaved(playingId).then((saved) => {
+      if (!cancelled) setLikedId(saved ? playingId : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [playingId]);
 
   // Every hook must run on every render. Bailing out before these useCallbacks
   // meant React saw 9 hooks with no track and 11 once one started playing —

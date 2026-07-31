@@ -2,32 +2,33 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { motion } from 'framer-motion';
 import { Play, MessageCircle, Heart } from 'lucide-react';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
 import { usePlayerStore } from '@/store/player.store';
 import { formatDuration, type EpisodeSummary } from '@/lib/podcast';
+import { FALLBACK_COVER_GRADIENT } from '@/lib/fallback-cover';
 import { cn } from '@/lib/utils';
 import type { Track } from '@mindset/types';
 
-export function PodcastCard({ podcast, queue }: { podcast: EpisodeSummary; queue?: EpisodeSummary[] }) {
+export function PodcastCard({
+  podcast,
+  queue,
+}: { podcast: EpisodeSummary; queue?: EpisodeSummary[] }) {
   const { play } = useAudioPlayer();
   const currentId = usePlayerStore((s) => s.currentTrack?.id);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const isActive = currentId === podcast.id;
 
   return (
-    <motion.article
-      whileHover={{ y: -6 }}
-      transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+    <article
       className={cn(
-        'gradient-ring group relative rounded-2xl overflow-hidden glass-card',
+        'motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-smooth motion-safe:hover:-translate-y-1.5 gradient-ring group relative rounded-2xl overflow-hidden glass-card',
         'transition-shadow duration-500 hover:shadow-[0_28px_60px_-24px_hsl(var(--glow)/0.55)]',
         isActive && 'ring-2 ring-primary glow-primary',
       )}
     >
       <div className="relative aspect-square overflow-hidden">
-        <Link href={`/podcast/${podcast.slug}`} className="block w-full h-full">
+        <Link href={`/podcast/${podcast.slug}`} className="relative block w-full h-full">
           {podcast.thumbnail_url ? (
             <Image
               src={podcast.thumbnail_url}
@@ -37,18 +38,7 @@ export function PodcastCard({ podcast, queue }: { podcast: EpisodeSummary; queue
               sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             />
           ) : (
-            <div
-              className="w-full h-full grid place-items-center transition-transform duration-slow group-hover:scale-110"
-              style={{
-                background:
-                  'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-2)) 60%, hsl(var(--aura-4)) 100%)',
-              }}
-            >
-              {/* Brand breath mark, so a coverless episode still looks deliberate */}
-              <span className="w-1/3 aspect-square rounded-full border-2 border-foreground/50 grid place-items-center">
-                <span className="w-1/3 aspect-square rounded-full bg-foreground/90" />
-              </span>
-            </div>
+            <div className="h-full w-full" style={{ background: FALLBACK_COVER_GRADIENT }} />
           )}
 
           {/* Scrim keeps the overlay chips legible on any artwork */}
@@ -73,12 +63,11 @@ export function PodcastCard({ podcast, queue }: { podcast: EpisodeSummary; queue
         )}
 
         {/* Play */}
-        <motion.button
+        <button
           type="button"
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.92 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 18 }}
-          onClick={() => play(podcast as unknown as Track, (queue ?? [podcast]) as unknown as Track[])}
+          onClick={() =>
+            play(podcast as unknown as Track, (queue ?? [podcast]) as unknown as Track[])
+          }
           aria-label={`Play ${podcast.title}`}
           className={cn(
             'absolute bottom-3 right-3 w-12 h-12 rounded-full grid place-items-center',
@@ -98,7 +87,7 @@ export function PodcastCard({ podcast, queue }: { podcast: EpisodeSummary; queue
           ) : (
             <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
           )}
-        </motion.button>
+        </button>
       </div>
 
       <div className="p-4">
@@ -121,6 +110,6 @@ export function PodcastCard({ podcast, queue }: { podcast: EpisodeSummary; queue
           </span>
         </div>
       </div>
-    </motion.article>
+    </article>
   );
 }

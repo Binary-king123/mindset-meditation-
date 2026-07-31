@@ -7,10 +7,21 @@ import { BRAND } from '@/lib/brand';
 import { HARDCODED_PLATFORMS } from '@/lib/platforms';
 
 const LISTEN_LINKS: Array<{ href: string; label: string }> = [
-  { href: '/#playlists', label: 'Playlists' },
+  { href: '/episodes', label: 'All episodes' },
   { href: '/playlists', label: 'All series' },
   { href: '/playlists?tab=saved', label: 'Your library' },
 ];
+
+/**
+ * Only profiles with a real URL in BRAND.social are rendered. These used to be
+ * hardcoded as bare `https://instagram.com` etc., so clicking an icon took the
+ * visitor to the platform's homepage rather than to this show.
+ */
+const SOCIALS = [
+  { href: BRAND.social.instagram, label: 'Instagram', Icon: Instagram },
+  { href: BRAND.social.youtube, label: 'YouTube', Icon: Youtube },
+  { href: BRAND.social.x, label: 'X', Icon: Twitter },
+].filter((s) => Boolean(s.href));
 
 const ACCOUNT_LINKS: Array<{ href: string; label: string }> = [
   { href: '/auth/login', label: 'Sign in' },
@@ -33,15 +44,15 @@ export async function Footer() {
         aria-hidden
       />
 
-      <div className="relative max-w-7xl mx-auto px-4 md:px-8 py-14">
+      <div className="relative max-w-7xl mx-auto px-4 md:px-8 pb-14 pt-5 sm:pt-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1.4fr_0.7fr_1.1fr_1.4fr] gap-10 lg:gap-8">
           {/* Brand + platforms */}
           <div>
             <Logo textClassName="text-base" />
-              <p className="text-sm text-foreground/60 mt-4 max-w-xs leading-relaxed">
-                {BRAND.tagline}. Guided meditations for sleep, stress, focus, and clarity — streamed
-                whenever you need them.
-              </p>
+            <p className="text-sm text-foreground/60 mt-4 max-w-xs leading-relaxed">
+              {BRAND.tagline}. Guided meditations for sleep, stress, focus, and clarity — streamed
+              whenever you need them.
+            </p>
             {platforms.length > 0 && (
               <div className="mt-6">
                 <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-foreground mb-3">
@@ -50,7 +61,11 @@ export async function Footer() {
                 {/* justify-start: the default centres the row, which left the
                     buttons floating out of line with the "Listen on" heading
                     above them on mobile. */}
-                <PlatformButtons platforms={platforms} variant="compact" className="justify-start" />
+                <PlatformButtons
+                  platforms={platforms}
+                  variant="compact"
+                  className="justify-start"
+                />
               </div>
             )}
           </div>
@@ -120,17 +135,22 @@ export async function Footer() {
           <p className="text-xs text-foreground/50">
             © {year} {BRAND.name}. All rights reserved.
           </p>
-          <div className="flex items-center gap-5 text-foreground/50">
-            <a href="https://instagram.com" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors" aria-label="Instagram">
-              <Instagram className="w-5 h-5" />
-            </a>
-            <a href="https://youtube.com" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors" aria-label="YouTube">
-              <Youtube className="w-5 h-5" />
-            </a>
-            <a href="https://x.com" target="_blank" rel="noopener noreferrer" className="hover:text-primary transition-colors" aria-label="X (formerly Twitter)">
-              <Twitter className="w-5 h-5" />
-            </a>
-          </div>
+          {SOCIALS.length > 0 && (
+            <div className="flex items-center gap-5 text-foreground/50">
+              {SOCIALS.map(({ href, label, Icon }) => (
+                <a
+                  key={label}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-primary transition-colors"
+                  aria-label={`${label} (opens in a new tab)`}
+                >
+                  <Icon className="w-5 h-5" />
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </footer>

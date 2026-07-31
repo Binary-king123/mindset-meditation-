@@ -11,6 +11,7 @@ import { Play, Clock, Calendar } from 'lucide-react';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
 import { usePlayerStore } from '@/store/player.store';
 import { formatDuration } from '@/lib/podcast';
+import { FALLBACK_COVER_GRADIENT } from '@/lib/fallback-cover';
 import { cn } from '@/lib/utils';
 import type { Track } from '@mindset/types';
 
@@ -84,25 +85,9 @@ export function EpisodeRow({
         className="relative w-14 h-14 md:w-16 md:h-16 rounded-lg overflow-hidden shrink-0"
       >
         {podcast.thumbnail_url ? (
-          <Image
-            src={podcast.thumbnail_url}
-            alt=""
-            fill
-            sizes="64px"
-            className="object-cover"
-          />
+          <Image src={podcast.thumbnail_url} alt="" fill sizes="64px" className="object-cover" />
         ) : (
-          <span
-            className="absolute inset-0 grid place-items-center"
-            style={{
-              background:
-                'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-4)) 60%, hsl(var(--aura-2)) 100%)',
-            }}
-          >
-            <span className="w-1/3 aspect-square rounded-full border-2 border-foreground/60 grid place-items-center">
-              <span className="w-1/3 aspect-square rounded-full bg-foreground/90" />
-            </span>
-          </span>
+          <div className="absolute inset-0" style={{ background: FALLBACK_COVER_GRADIENT }} />
         )}
         <span
           className={cn(

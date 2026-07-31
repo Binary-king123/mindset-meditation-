@@ -9,4 +9,19 @@ export const BRAND = {
   description: 'Your space for inner peace, better sleep, and a healthier, happier mind.',
   /** Where footer enquiries are delivered. */
   contactEmail: 'millionairemindset17@gmail.com',
+
+  /**
+   * Social profiles for the footer icons.
+   *
+   * These were previously hardcoded in footer.tsx as bare `https://instagram.com`,
+   * `https://youtube.com` and `https://x.com` — clicking an icon sent the visitor
+   * to the platform's own homepage rather than to this show. An empty string
+   * hides that icon entirely, which is better than a link that goes nowhere
+   * useful: fill in the real profile URL to bring it back.
+   */
+  social: {
+    instagram: '',
+    youtube: '',
+    x: '',
+  },
 } as const;

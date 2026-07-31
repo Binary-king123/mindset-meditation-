@@ -5,12 +5,13 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft, Heart, ListMusic } from 'lucide-react';
 import { Navbar } from '@/components/layout/navbar';
 import { Footer } from '@/components/layout/footer';
-import { AudioPlayer } from '@/components/player/audio-player';
+import { AudioPlayer } from '@/components/player/audio-player-lazy';
 import { EpisodeRow, type EpisodeItem } from '@/components/podcast/episode-row';
 import { PlaylistPlayButton } from '@/components/playlist/playlist-play-button';
 import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
-import { createClient } from '@/lib/supabase/server';
+import { createPublicClient } from '@/lib/supabase/public';
 import { PODCAST_SELECT, formatPlaylistMeta, type EpisodeSummary } from '@/lib/podcast';
+import { FALLBACK_COVER_GRADIENT } from '@/lib/fallback-cover';
 import { BRAND } from '@/lib/brand';
 import { JsonLd, pageMetadata, playlistLd, breadcrumbLd } from '@/lib/seo';
 
@@ -20,10 +21,42 @@ import { JsonLd, pageMetadata, playlistLd, breadcrumbLd } from '@/lib/seo';
 // slug then renders the 404 page under a 200, a soft 404 that tells crawlers
 // and uptime checks a broken URL succeeded. Losing the skeleton here is the
 // price of a correct status code.
-export const dynamic = 'force-dynamic';
+// ISR rather than force-dynamic: this page reads no session at all — both
+// queries are public playlist data. It was only dynamic because the cookie
+// client was used, and touching cookies opts a route into dynamic rendering.
+// createPublicClient exists for exactly this (lib/supabase/public.ts).
+export const revalidate = 300;
+
+/**
+ * Prerender the known playlists at build time.
+ *
+ * `revalidate` alone does nothing for a dynamic segment: without a params list
+ * Next renders every request on demand and never caches it (the homepage, a
+ * static route, gets ISR from `revalidate` by itself — this one does not).
+ *
+ * `dynamicParams` stays at its default of true, so a playlist created after the
+ * build still renders on first request and is cached from then on.
+ */
+export async function generateStaticParams() {
+  try {
+    const supabase = createPublicClient();
+    const { data } = await supabase
+      .from('playlists')
+      .select('slug')
+      .eq('is_public', true)
+      .is('deleted_at', null)
+      .not('slug', 'is', null)
+      .limit(500);
+    return ((data ?? []) as Array<{ slug: string }>).map((p) => ({ slug: p.slug }));
+  } catch {
+    // CI builds against a placeholder Supabase project. An empty list is
+    // correct there — every page simply renders on demand instead.
+    return [];
+  }
+}
 
 async function getPlaylist(slug: string) {
-  const supabase = await createClient();
+  const supabase = createPublicClient();
   const { data } = await supabase
     .from('playlists')
     .select('id, title, slug, description, thumbnail_url, track_count, total_duration_seconds')
@@ -59,6 +92,9 @@ export async function generateMetadata({
       `A ${count}-part guided meditation series from ${BRAND.name}. ${BRAND.tagline}.`,
     path: `/playlist/${slug}`,
     image: playlist.thumbnail_url,
+    // Indexable: these are the pages the whole SEO pipeline exists to
+    // surface. The root layout de-indexes everything by default (layout.tsx).
+    index: true,
   });
 }
 
@@ -67,7 +103,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
   const playlist = await getPlaylist(slug);
   if (!playlist) notFound();
 
-  const supabase = await createClient();
+  const supabase = createPublicClient();
   const { data: rows } = await supabase
     .from('playlist_tracks')
     .select(`position, track:tracks(${PODCAST_SELECT})`)
@@ -148,14 +184,9 @@ export default async function PlaylistPage({ params }: { params: Promise<{ slug:
                     />
                   ) : (
                     <div
-                      className="w-full h-full grid place-items-center"
-                      style={{
-                        background:
-                          'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-4)) 55%, hsl(var(--aura-2)) 100%)',
-                      }}
-                    >
-                      <ListMusic className="w-20 h-20 text-foreground/90" />
-                    </div>
+                      className="w-full h-full"
+                      style={{ background: FALLBACK_COVER_GRADIENT }}
+                    />
                   )}
                 </div>
               </Reveal>

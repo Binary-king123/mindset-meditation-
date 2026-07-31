@@ -5,7 +5,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft, Clock, MessageCircle, Heart } from 'lucide-react';
 import { Navbar } from '@/components/layout/navbar';
 import { Footer } from '@/components/layout/footer';
-import { AudioPlayer } from '@/components/player/audio-player';
+import { AudioPlayer } from '@/components/player/audio-player-lazy';
 import { PlayButton } from '@/components/podcast/play-button';
 import { LikeButton } from '@/components/podcast/like-button';
 import { ShareButton } from '@/components/podcast/share-button';
@@ -17,9 +17,14 @@ import { Reveal, RevealGroup, RevealItem } from '@/components/ui/reveal';
 import { PlatformButtons } from '@/components/podcast/platform-buttons';
 import { createClient } from '@/lib/supabase/server';
 import { PODCAST_SELECT, formatDuration, type EpisodeSummary } from '@/lib/podcast';
+import { FALLBACK_COVER_GRADIENT } from '@/lib/fallback-cover';
 import { BRAND } from '@/lib/brand';
 import { getShow } from '@/lib/show';
-import { parsePlatformLinks, resolvePlatformLinks } from '@/lib/platforms';
+import {
+  parsePlatformLinks,
+  resolvePlatformLinks,
+  HARDCODED_PLATFORMS,
+} from '@/lib/platforms';
 import { JsonLd, pageMetadata, episodeLd, breadcrumbLd } from '@/lib/seo';
 
 // NOTE: this route deliberately has no loading.tsx. A loading file makes the
@@ -39,7 +44,9 @@ export async function generateMetadata({
   const supabase = await createClient();
   const { data } = await supabase
     .from('tracks')
-    .select('title, short_description, description, thumbnail_url, created_at, duration_seconds')
+    .select(
+      'title, meta_description, short_description, description, thumbnail_url, created_at, published_at, duration_seconds, keywords',
+    )
     .eq('slug', slug)
     .maybeSingle();
 
@@ -50,14 +57,21 @@ export async function generateMetadata({
     // "· Guided Meditation" gives every episode page a keyword-bearing title
     // instead of a bare episode name nobody searches for.
     title: `${data.title} · ${minutes}-Min Guided Meditation`,
+    // meta_description is the generated 150-160 char field; the rest are
+    // fallbacks for rows created before it existed.
     description:
+      data.meta_description ||
       data.short_description ||
       data.description ||
       `A ${minutes}-minute guided meditation from ${BRAND.name}. ${BRAND.tagline}.`,
     path: `/podcast/${slug}`,
     image: data.thumbnail_url,
+    keywords: data.keywords ?? undefined,
     type: 'article',
-    publishedTime: data.created_at ?? undefined,
+    publishedTime: data.published_at ?? data.created_at ?? undefined,
+    // Indexable: these are the pages the whole SEO pipeline exists to
+    // surface. The root layout de-indexes everything by default (layout.tsx).
+    index: true,
   });
 }
 
@@ -139,7 +153,7 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
 
   // Which comment authors are staff — drives the "Host" badge.
   // Reads profiles.role directly; the roles/user_roles join tables were
-  // collapsed into that column in migration 021.
+  // collapsed into that column when the schema was consolidated.
   const authorIds = [
     ...new Set(((commentRows ?? []) as Array<{ user_id: string }>).map((c) => c.user_id)),
   ];
@@ -167,10 +181,15 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
 
   // This episode's own links win; anything left blank falls back to the
   // show-wide link, so most episodes need no per-episode setup at all.
-  const platforms = resolvePlatformLinks(
+  // Falls back to HARDCODED_PLATFORMS when neither the episode nor the show
+  // record names a URL — the show-level links have no admin screen, so without
+  // this the episode page would show no platform buttons at all while the
+  // homepage and footer show four.
+  const resolved = resolvePlatformLinks(
     (await getShow()).platformLinks,
     parsePlatformLinks(p.platform_links),
   );
+  const platforms = resolved.length ? resolved : HARDCODED_PLATFORMS;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -179,10 +198,13 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
           episodeLd({
             title: p.title,
             slug: p.slug,
-            description: p.short_description || p.description,
+            description: p.excerpt || p.short_description || p.description,
             durationSeconds: p.duration_seconds,
             thumbnailUrl: p.thumbnail_url,
-            createdAt: p.created_at,
+            // published_at, not created_at: an episode drafted weeks before it
+            // goes live must not tell Google it was published on upload day.
+            // generateMetadata above already resolves it this way.
+            createdAt: p.published_at ?? p.created_at,
             hostName: p.instructor_name,
             platforms,
           }),
@@ -245,16 +267,9 @@ export default async function PodcastPage({ params }: { params: Promise<{ slug: 
                     />
                   ) : (
                     <div
-                      className="w-full h-full flex items-center justify-center text-7xl"
-                      style={{
-                        background:
-                          'linear-gradient(140deg, hsl(var(--aura-1)) 0%, hsl(var(--aura-2)) 60%, hsl(var(--aura-4)) 100%)',
-                      }}
-                    >
-                      <span className="w-1/3 aspect-square rounded-full border-2 border-foreground/50 grid place-items-center">
-                        <span className="w-1/3 aspect-square rounded-full bg-foreground/90" />
-                      </span>
-                    </div>
+                      className="w-full h-full"
+                      style={{ background: FALLBACK_COVER_GRADIENT }}
+                    />
                   )}
                 </div>
               </Reveal>

@@ -444,6 +444,90 @@
   }
 }
 
+/* Save-button feedback. Was two framer-motion elements; as keyframes it costs
+   nothing and keeps framer-motion off the episode page entirely. */
+.like-burst {
+  animation: like-burst 0.6s ease-out forwards;
+}
+.like-pop {
+  animation: like-pop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes like-burst {
+  from { transform: scale(0.4); opacity: 0.9; }
+  to   { transform: scale(2.2); opacity: 0; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes dialogIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes like-pop {
+  from { transform: scale(0.6); }
+  to   { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .like-burst { animation: none; opacity: 0; }
+  .like-pop   { animation: none; }
+}
+
+/* === Scroll reveal ===
+   Drives components/ui/reveal.tsx. The group toggles one data attribute and
+   each child derives its own delay from its position, so a staggered grid costs
+   one IntersectionObserver rather than one animation loop per card. */
+.reveal-item {
+  transition:
+    opacity 0.65s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(var(--reveal-delay, 0s) + var(--reveal-index, 0) * var(--reveal-stagger, 0.09s));
+}
+
+/* Hidden only while an enclosing group is waiting to reveal. Written this way
+   round on purpose: if the default were `opacity: 0`, a RevealItem rendered
+   outside a RevealGroup — or nested one level deeper than a direct child —
+   would be invisible forever, with nothing in the type system to catch it. */
+.reveal-group[data-revealed='false'] > .reveal-item {
+  opacity: 0;
+}
+.reveal-group[data-revealed='false'] > .reveal-item--up    { transform: translateY(1.75rem); }
+.reveal-group[data-revealed='false'] > .reveal-item--left  { transform: translateX(-1.75rem); }
+.reveal-group[data-revealed='false'] > .reveal-item--right { transform: translateX(1.75rem); }
+.reveal-group[data-revealed='false'] > .reveal-item--scale { transform: scale(0.94); }
+
+/* Position feeds the stagger. Twelve covers every grid on the site; anything
+   beyond simply shares the last delay rather than trailing indefinitely. */
+.reveal-item:nth-child(1)  { --reveal-index: 0; }
+.reveal-item:nth-child(2)  { --reveal-index: 1; }
+.reveal-item:nth-child(3)  { --reveal-index: 2; }
+.reveal-item:nth-child(4)  { --reveal-index: 3; }
+.reveal-item:nth-child(5)  { --reveal-index: 4; }
+.reveal-item:nth-child(6)  { --reveal-index: 5; }
+.reveal-item:nth-child(7)  { --reveal-index: 6; }
+.reveal-item:nth-child(8)  { --reveal-index: 7; }
+.reveal-item:nth-child(9)  { --reveal-index: 8; }
+.reveal-item:nth-child(10) { --reveal-index: 9; }
+.reveal-item:nth-child(11) { --reveal-index: 10; }
+.reveal-item:nth-child(n + 12) { --reveal-index: 11; }
+
+/* Reduced motion: still reveal, just without the travel. Hiding the content
+   outright would make the page unreadable for anyone who sets this. */
+@media (prefers-reduced-motion: reduce) {
+  .reveal-group[data-revealed='false'] > .reveal-item {
+    opacity: 1;
+    transform: none;
+  }
+  .reveal-item {
+    transition: none;
+  }
+}
+
 /* === Seek slider ===
    A real <input type="range"> rather than a click-handled <div>, so it is
    keyboard- and screen-reader-operable for free. The filled portion is painted
@@ -454,8 +538,10 @@
 .seek-range {
   -webkit-appearance: none;
   appearance: none;
-  /* Taller than the 4px track: on touch this is the whole grab target. */
-  height: 20px;
+  /* Taller than the 4px track: on touch this is the whole grab target, so it
+     carries the touch minimum rather than the track's visible 4px. Dragging a
+     scrub bar needs more room than tapping a button, hence 28 rather than 24. */
+  height: 28px;
   background: transparent;
   cursor: pointer;
   touch-action: none;

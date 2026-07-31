@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { motion, AnimatePresence, useScroll, useSpring } from 'framer-motion';
 import { Menu, X, Upload, LogOut } from 'lucide-react';
 import { useAuth } from '@/components/providers/auth-provider';
 import { Logo } from '@/components/layout/logo';
 import { ThemeToggle } from '@/components/layout/theme-toggle';
+import { SearchBox } from '@/components/search/search-box';
 import { cn } from '@/lib/utils';
 
 export function Navbar() {
@@ -17,9 +17,28 @@ export function Navbar() {
   const pathname = usePathname();
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
 
-  // Reading-progress bar across the top of the page
-  const { scrollYProgress } = useScroll();
-  const progress = useSpring(scrollYProgress, { stiffness: 120, damping: 28, restDelta: 0.001 });
+  // Reading-progress bar across the top of the page.
+  //
+  // Written straight to a CSS custom property on a ref rather than through
+  // React state: this fires on every scroll frame, and a setState per frame
+  // would re-render the whole navbar sixty times a second. The transform is
+  // composited, so the bar costs nothing to paint.
+  const progressRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const update = () => {
+      const doc = document.documentElement;
+      const max = doc.scrollHeight - doc.clientHeight;
+      const ratio = max > 0 ? Math.min(1, doc.scrollTop / max) : 0;
+      progressRef.current?.style.setProperty('--progress', String(ratio));
+    };
+    update();
+    window.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, []);
 
   // NB: this used to force setTheme('dark') on every mount, which pinned the
   // site to one theme and silently undid any user choice. Dark is still the
@@ -37,6 +56,9 @@ export function Navbar() {
 
   const links = [
     { href: '/', label: 'Home' },
+    // Playlists only. Episodes are reached through the playlist they belong to,
+    // the way a podcast app presents a series — /episodes still exists as the
+    // "View all" target under Latest Episodes, it is just not top-level nav.
     { href: '/playlists', label: 'Playlists' },
     ...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : []),
   ];
@@ -70,17 +92,17 @@ export function Navbar() {
                 )}
               >
                 {active && (
-                  <motion.span
-                    layoutId="nav-pill"
-                    className="absolute inset-0 rounded-full bg-foreground/10 border border-foreground/10"
-                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                  />
+                  <span className="absolute inset-0 rounded-full bg-foreground/10 border border-foreground/10" />
                 )}
                 <span className="relative">{l.label}</span>
               </Link>
             );
           })}
         </div>
+
+        {/* Desktop only — on phones search lives in the sheet, where there is
+            room for a full-width field. */}
+        <SearchBox compact className="hidden lg:flex w-56 xl:w-64" />
 
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <ThemeToggle className="hidden sm:grid" />
@@ -132,88 +154,91 @@ export function Navbar() {
             className="md:hidden press p-2 text-foreground/70 hover:text-foreground rounded-xl transition-colors"
             aria-label="Toggle menu"
             aria-expanded={isOpen}
+            aria-controls="mobile-nav"
           >
             {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </nav>
 
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className="md:hidden overflow-hidden bg-background/95 backdrop-blur-2xl border-b border-border"
-          >
-            <div className="px-4 py-4 space-y-1">
-              {links.map((l, i) => (
-                <motion.div
-                  key={l.href}
-                  initial={{ opacity: 0, x: -12 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.05 + i * 0.05 }}
-                >
-                  <Link
-                    href={l.href}
-                    className="block px-4 py-3 text-foreground font-semibold hover:bg-foreground/5 rounded-xl transition-colors"
-                  >
-                    {l.label}
-                  </Link>
-                </motion.div>
-              ))}
-              {isAdmin && (
+      <div
+        id="mobile-nav"
+        className={cn(
+          'md:hidden grid overflow-hidden bg-background/95 backdrop-blur-2xl',
+          'motion-safe:transition-[grid-template-rows,opacity] motion-safe:duration-300 motion-safe:ease-smooth',
+          isOpen
+            ? 'grid-rows-[1fr] opacity-100 border-b border-border'
+            : 'grid-rows-[0fr] opacity-0 pointer-events-none',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="px-4 py-4 space-y-1">
+            <div className="pb-3 lg:hidden">
+              <SearchBox compact />
+            </div>
+
+            {links.map((l) => (
+              <div key={l.href}>
                 <Link
-                  href="/admin/upload"
+                  href={l.href}
+                  className="block px-4 py-3 text-foreground font-semibold hover:bg-foreground/5 rounded-xl transition-colors"
+                >
+                  {l.label}
+                </Link>
+              </div>
+            ))}
+            {isAdmin && (
+              <Link
+                href="/admin/upload"
+                className="block px-4 py-3 text-primary font-bold hover:bg-foreground/5 rounded-xl transition-colors"
+              >
+                Upload session
+              </Link>
+            )}
+            {user ? (
+              <button
+                type="button"
+                onClick={() => {
+                  signOut();
+                  setIsOpen(false);
+                }}
+                className="block w-full text-left px-4 py-3 text-destructive font-semibold hover:bg-destructive/10 rounded-xl transition-colors"
+              >
+                Sign out
+              </button>
+            ) : (
+              <>
+                <Link
+                  href="/auth/login"
+                  className="block px-4 py-3 text-foreground font-semibold hover:bg-foreground/5 rounded-xl transition-colors"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/auth/register"
                   className="block px-4 py-3 text-primary font-bold hover:bg-foreground/5 rounded-xl transition-colors"
                 >
-                  Upload session
+                  Sign up
                 </Link>
-              )}
-              {user ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    signOut();
-                    setIsOpen(false);
-                  }}
-                  className="block w-full text-left px-4 py-3 text-destructive font-semibold hover:bg-destructive/10 rounded-xl transition-colors"
-                >
-                  Sign out
-                </button>
-              ) : (
-                <>
-                  <Link
-                    href="/auth/login"
-                    className="block px-4 py-3 text-foreground font-semibold hover:bg-foreground/5 rounded-xl transition-colors"
-                  >
-                    Sign in
-                  </Link>
-                  <Link
-                    href="/auth/register"
-                    className="block px-4 py-3 text-primary font-bold hover:bg-foreground/5 rounded-xl transition-colors"
-                  >
-                    Sign up
-                  </Link>
-                </>
-              )}
+              </>
+            )}
 
-              <div className="mt-2 flex items-center justify-between gap-3 border-t border-border pt-3 sm:hidden">
-                <span className="px-4 text-sm font-semibold text-foreground/70">Appearance</span>
-                <ThemeToggle />
-              </div>
+            <div className="mt-2 flex items-center justify-between gap-3 border-t border-border pt-3 sm:hidden">
+              <span className="px-4 text-sm font-semibold text-foreground/70">Appearance</span>
+              <ThemeToggle />
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </div>
+        </div>
+      </div>
 
-      <motion.div
-        style={{ scaleX: progress }}
+      <div
+        ref={progressRef}
+        aria-hidden
         className="absolute bottom-0 left-0 right-0 h-[2px] origin-left"
+        style={{ transform: 'scaleX(var(--progress, 0))' }}
       >
         <div className="w-full h-full bg-gradient-to-r from-[hsl(var(--aura-1))] via-[hsl(var(--aura-2))] to-[hsl(var(--aura-4))]" />
-      </motion.div>
+      </div>
     </header>
   );
 }

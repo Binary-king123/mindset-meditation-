@@ -1,7 +1,6 @@
 'use client';
 
 import type { EpisodeSummary } from '@/lib/podcast';
-import { motion } from 'framer-motion';
 import { Play, Pause } from 'lucide-react';
 import { useAudioPlayer } from '@/components/providers/audio-player-provider';
 import { usePlayerStore } from '@/store/player.store';
@@ -25,13 +24,10 @@ export function PlaylistPlayButton({ tracks }: { tracks: EpisodeSummary[] }) {
   }
 
   return (
-    <motion.button
+    <button
       type="button"
       onClick={onClick}
-      whileHover={{ scale: 1.03 }}
-      whileTap={{ scale: 0.97 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-      className="shine relative flex items-center gap-3 pl-3 pr-7 py-3 bg-primary text-white rounded-full font-bold glow-primary hover:bg-primary/90 transition-colors"
+      className="motion-safe:transition-transform motion-safe:hover:scale-[1.03] motion-safe:active:scale-[0.97] shine relative flex items-center gap-3 pl-3 pr-7 py-3 bg-primary text-white rounded-full font-bold glow-primary hover:bg-primary/90 transition-colors"
     >
       <span className="relative grid place-items-center w-9 h-9 rounded-full bg-foreground/20">
         {playing && (
@@ -44,6 +40,6 @@ export function PlaylistPlayButton({ tracks }: { tracks: EpisodeSummary[] }) {
         )}
       </span>
       {playing ? 'Pause playlist' : 'Play all'}
-    </motion.button>
+    </button>
   );
 }
