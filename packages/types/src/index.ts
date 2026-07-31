@@ -62,6 +62,19 @@ export interface Track {
   favorite_count: number;
   comment_count: number;
   platform_links: PlatformLinksJson;
+
+  // Generated from the upload — see lib/seo/generate.ts. Nullable because rows
+  // created before this existed have not been backfilled.
+  excerpt: string | null;
+  meta_description: string | null;
+  keywords: string[] | null;
+  /** When the episode went public. `created_at` is when the file was uploaded. */
+  published_at: string | null;
+  file_size_bytes: number | null;
+  bitrate_kbps: number | null;
+  /** Base64 LQIP for next/image `placeholder="blur"`. */
+  blur_data_url: string | null;
+
   deleted_at: string | null;
   created_at: string;
   updated_at: string;

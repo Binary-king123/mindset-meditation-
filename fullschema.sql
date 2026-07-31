@@ -188,10 +188,103 @@ CREATE TABLE IF NOT EXISTS podcast.tracks (
 -- exists, so existing databases get the new column here (migration 027).
 ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS platform_links JSONB DEFAULT '{}'::jsonb NOT NULL;
 
+-- Generated SEO metadata. Every one of these is derived from what the admin
+-- uploads (title, audio, cover, playlist) — see lib/seo/generate.ts. Nullable
+-- so this file stays safe to re-run over a populated table.
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS excerpt          TEXT;
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS meta_description TEXT;
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS keywords         TEXT[];
+-- created_at is when the file was uploaded; this is when it went public. A
+-- draft sat on for a month should not date its RSS item to the upload.
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS published_at     TIMESTAMPTZ;
+-- Read in the browser at upload time (File.size and a derived rate) — no
+-- server-side ffmpeg. file_size_bytes is required for the RSS <enclosure>.
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS file_size_bytes  BIGINT;
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS bitrate_kbps     INTEGER;
+-- Tiny base64 LQIP produced by downscaling the cover on a canvas before
+-- upload, so next/image can render placeholder="blur" without sharp.
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS blur_data_url    TEXT;
+
+ALTER TABLE podcast.tracks DROP CONSTRAINT IF EXISTS tracks_excerpt_check;
+ALTER TABLE podcast.tracks ADD  CONSTRAINT tracks_excerpt_check CHECK (length(excerpt) <= 600);
+ALTER TABLE podcast.tracks DROP CONSTRAINT IF EXISTS tracks_meta_description_check;
+ALTER TABLE podcast.tracks ADD  CONSTRAINT tracks_meta_description_check CHECK (length(meta_description) <= 320);
+
+-- Backfill published_at for rows that were already public before this column
+-- existed, so the feed and sitemap have a date to sort by.
+UPDATE podcast.tracks SET published_at = created_at
+ WHERE published_at IS NULL AND status = 'published';
+
+
+-- Full-text search. `to_tsvector` must be the TWO-argument form here: the
+-- one-argument version is STABLE (it reads default_text_search_config) and a
+-- GENERATED column only accepts IMMUTABLE expressions.
+-- Weights: title beats keywords beats excerpt beats the full description.
+-- array_to_string() is marked STABLE, not IMMUTABLE: in general an element
+-- type's output function need not be immutable, so Postgres marks the whole
+-- function conservatively — and a GENERATED column rejects it outright with
+-- "ERROR: 42P17: generation expression is not immutable". For TEXT[] the
+-- conversion genuinely is immutable, so this narrowly-typed wrapper is safe to
+-- declare as such. NULL folds to an empty array, so the result is never NULL.
+-- Created only when absent, never replaced: once the generated column below
+-- depends on this function, re-running this file must not attempt to redefine
+-- it out from under that dependency.
+DO $keywords_text$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'podcast' AND p.proname = 'keywords_text'
+    ) THEN
+        EXECUTE $fn$
+            CREATE FUNCTION podcast.keywords_text(p_keywords TEXT[])
+            RETURNS TEXT
+            LANGUAGE sql
+            IMMUTABLE
+            PARALLEL SAFE
+            AS $body$ SELECT array_to_string(coalesce(p_keywords, ARRAY[]::TEXT[]), ' ') $body$;
+        $fn$;
+    END IF;
+END
+$keywords_text$;
+
+ALTER TABLE podcast.tracks ADD COLUMN IF NOT EXISTS search_vector tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('english'::regconfig, podcast.keywords_text(keywords)), 'B') ||
+        setweight(to_tsvector('english'::regconfig, coalesce(excerpt, '')), 'C') ||
+        setweight(to_tsvector('english'::regconfig, coalesce(description, '')), 'D')
+    ) STORED;
+
+ALTER TABLE podcast.playlists ADD COLUMN IF NOT EXISTS search_vector tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('english'::regconfig, coalesce(description, '')), 'C')
+    ) STORED;
+
 
 -- =============================================================================
 -- CONSTRAINTS
 -- =============================================================================
+-- Foreign keys are dropped first, before the primary/unique constraints they
+-- reference — dropping a referenced PK/unique while a dependent FK still
+-- exists fails with "cannot drop constraint ... because other objects depend
+-- on it" (2BP01). comments_parent_id_fkey is self-referential (references
+-- comments.id), so re-running this file against a database that already has
+-- it would always hit this on comments_pkey specifically. Every FK below is
+-- re-added at the end of this section, once its target constraint exists again.
+ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_track_id_fkey;
+ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_user_id_fkey;
+ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_parent_id_fkey;
+ALTER TABLE podcast.favorites DROP CONSTRAINT IF EXISTS favorites_user_id_fkey;
+ALTER TABLE podcast.favorites DROP CONSTRAINT IF EXISTS favorites_track_id_fkey;
+ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_track_id_fkey;
+ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_user_id_fkey;
+ALTER TABLE podcast.playlist_tracks DROP CONSTRAINT IF EXISTS playlist_tracks_track_id_fkey;
+ALTER TABLE podcast.playlist_tracks DROP CONSTRAINT IF EXISTS playlist_tracks_playlist_id_fkey;
+ALTER TABLE podcast.playlists DROP CONSTRAINT IF EXISTS playlists_user_id_fkey;
+ALTER TABLE podcast.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey;
+
 ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_pkey;
 ALTER TABLE podcast.comments ADD CONSTRAINT comments_pkey PRIMARY KEY (id);
 ALTER TABLE podcast.favorites DROP CONSTRAINT IF EXISTS favorites_pkey;
@@ -247,27 +340,18 @@ ALTER TABLE podcast.show DROP CONSTRAINT IF EXISTS show_platform_links_check;
 ALTER TABLE podcast.show ADD CONSTRAINT show_platform_links_check CHECK ((jsonb_typeof(platform_links) = 'object'::text));
 ALTER TABLE podcast.tracks DROP CONSTRAINT IF EXISTS tracks_platform_links_check;
 ALTER TABLE podcast.tracks ADD CONSTRAINT tracks_platform_links_check CHECK ((jsonb_typeof(platform_links) = 'object'::text));
-ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_track_id_fkey;
+-- Already dropped above (before the PK/UNIQUE/CHECK section they depend on);
+-- only re-adding is needed here.
 ALTER TABLE podcast.comments ADD CONSTRAINT comments_track_id_fkey FOREIGN KEY (track_id) REFERENCES podcast.tracks(id) ON DELETE CASCADE;
-ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_user_id_fkey;
 ALTER TABLE podcast.comments ADD CONSTRAINT comments_user_id_fkey FOREIGN KEY (user_id) REFERENCES podcast.profiles(id) ON DELETE CASCADE;
-ALTER TABLE podcast.comments DROP CONSTRAINT IF EXISTS comments_parent_id_fkey;
 ALTER TABLE podcast.comments ADD CONSTRAINT comments_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES podcast.comments(id) ON DELETE CASCADE;
-ALTER TABLE podcast.favorites DROP CONSTRAINT IF EXISTS favorites_user_id_fkey;
 ALTER TABLE podcast.favorites ADD CONSTRAINT favorites_user_id_fkey FOREIGN KEY (user_id) REFERENCES podcast.profiles(id) ON DELETE CASCADE;
-ALTER TABLE podcast.favorites DROP CONSTRAINT IF EXISTS favorites_track_id_fkey;
 ALTER TABLE podcast.favorites ADD CONSTRAINT favorites_track_id_fkey FOREIGN KEY (track_id) REFERENCES podcast.tracks(id) ON DELETE CASCADE;
-ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_track_id_fkey;
 ALTER TABLE podcast.play_events ADD CONSTRAINT play_events_track_id_fkey FOREIGN KEY (track_id) REFERENCES podcast.tracks(id) ON DELETE CASCADE;
-ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_user_id_fkey;
 ALTER TABLE podcast.play_events ADD CONSTRAINT play_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES podcast.profiles(id) ON DELETE SET NULL;
-ALTER TABLE podcast.playlist_tracks DROP CONSTRAINT IF EXISTS playlist_tracks_track_id_fkey;
 ALTER TABLE podcast.playlist_tracks ADD CONSTRAINT playlist_tracks_track_id_fkey FOREIGN KEY (track_id) REFERENCES podcast.tracks(id) ON DELETE CASCADE;
-ALTER TABLE podcast.playlist_tracks DROP CONSTRAINT IF EXISTS playlist_tracks_playlist_id_fkey;
 ALTER TABLE podcast.playlist_tracks ADD CONSTRAINT playlist_tracks_playlist_id_fkey FOREIGN KEY (playlist_id) REFERENCES podcast.playlists(id) ON DELETE CASCADE;
-ALTER TABLE podcast.playlists DROP CONSTRAINT IF EXISTS playlists_user_id_fkey;
 ALTER TABLE podcast.playlists ADD CONSTRAINT playlists_user_id_fkey FOREIGN KEY (user_id) REFERENCES podcast.profiles(id) ON DELETE CASCADE;
-ALTER TABLE podcast.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey;
 ALTER TABLE podcast.profiles ADD CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 
@@ -298,6 +382,10 @@ CREATE INDEX IF NOT EXISTS idx_tracks_created_at ON podcast.tracks USING btree (
 CREATE INDEX IF NOT EXISTS idx_tracks_deleted_at ON podcast.tracks USING btree (deleted_at) WHERE (deleted_at IS NULL);
 CREATE INDEX IF NOT EXISTS idx_tracks_play_count ON podcast.tracks USING btree (play_count DESC) WHERE (deleted_at IS NULL);
 CREATE INDEX IF NOT EXISTS idx_tracks_slug ON podcast.tracks USING btree (slug);
+CREATE INDEX IF NOT EXISTS idx_tracks_search ON podcast.tracks USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS idx_playlists_search ON podcast.playlists USING GIN (search_vector);
+-- Feed and sitemap both order published episodes by publish date.
+CREATE INDEX IF NOT EXISTS idx_tracks_published_at ON podcast.tracks USING btree (published_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tracks_status ON podcast.tracks USING btree (status) WHERE (deleted_at IS NULL);
 
 
@@ -412,6 +500,14 @@ AS $function$
 DECLARE
     v_role TEXT;
 BEGIN
+    -- SECURITY DEFINER bypasses profiles_select_own's RLS, so without this
+    -- check any authenticated caller could pass an arbitrary uuid here and
+    -- enumerate which accounts are admin/super_admin. Every real call site
+    -- (middleware, admin-guard, actions.ts) only ever queries its own id.
+    IF p_user_id IS DISTINCT FROM auth.uid() AND NOT podcast.is_admin() THEN
+        RAISE EXCEPTION 'Not authorized' USING ERRCODE = '42501';
+    END IF;
+
     SELECT role INTO v_role FROM podcast.profiles WHERE id = p_user_id;
     RETURN COALESCE(v_role, 'user');
 END;
@@ -496,6 +592,42 @@ END;
 $function$
 ;
 
+-- Ranked full-text search over published episodes.
+--
+-- An RPC rather than a PostgREST filter because ranking is the point:
+-- ts_rank weights a title hit above a description hit (the setweight A/B/C/D
+-- lanes on tracks.search_vector), and PostgREST cannot order by a computed
+-- rank. websearch_to_tsquery is the parser that accepts what people actually
+-- type -- quoted phrases, OR, and a leading minus to exclude -- without
+-- raising on punctuation the way to_tsquery does.
+CREATE OR REPLACE FUNCTION podcast.search_tracks(p_query text, p_limit integer DEFAULT 20)
+ RETURNS TABLE (
+    id uuid,
+    title text,
+    slug text,
+    excerpt text,
+    short_description text,
+    thumbnail_url text,
+    duration_seconds integer,
+    published_at timestamptz,
+    created_at timestamptz,
+    rank real
+ )
+ LANGUAGE sql
+ STABLE
+AS $function$
+    SELECT t.id, t.title, t.slug, t.excerpt, t.short_description, t.thumbnail_url,
+           t.duration_seconds, t.published_at, t.created_at,
+           ts_rank(t.search_vector, websearch_to_tsquery('english'::regconfig, p_query)) AS rank
+    FROM podcast.tracks t
+    WHERE t.deleted_at IS NULL
+      AND t.status = 'published'
+      AND t.search_vector @@ websearch_to_tsquery('english'::regconfig, p_query)
+    ORDER BY rank DESC, COALESCE(t.published_at, t.created_at) DESC
+    LIMIT LEAST(GREATEST(p_limit, 1), 50);
+$function$
+;
+
 CREATE OR REPLACE FUNCTION podcast.increment_play_count(p_track_id uuid)
  RETURNS void
  LANGUAGE plpgsql
@@ -523,23 +655,9 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION podcast.is_premium_user()
- RETURNS boolean
- LANGUAGE plpgsql
- STABLE SECURITY DEFINER
-AS $function$
-BEGIN
-    RETURN EXISTS (
-        SELECT 1
-        FROM podcast.subscriptions s
-        WHERE s.user_id = auth.uid()
-          AND s.plan != 'free'
-          AND s.status IN ('active', 'trial')
-          AND (s.ends_at IS NULL OR s.ends_at > NOW())
-    );
-END;
-$function$
-;
+-- is_premium_user() removed: it referenced objects this schema never creates
+-- and nothing in the app called it.
+DROP FUNCTION IF EXISTS podcast.is_premium_user();
 
 CREATE OR REPLACE FUNCTION podcast.is_super_admin()
  RETURNS boolean
@@ -547,27 +665,24 @@ CREATE OR REPLACE FUNCTION podcast.is_super_admin()
  STABLE SECURITY DEFINER
 AS $function$
 BEGIN
+    -- Reads profiles.role, the same column is_admin() uses. This previously
+    -- joined podcast.user_roles + podcast.roles, which migration 021 collapsed
+    -- into that column and this schema never creates — so every call raised,
+    -- and because profiles_delete_admin USES this function, deleting a profile
+    -- always errored.
     RETURN EXISTS (
         SELECT 1
-        FROM podcast.user_roles ur
-        JOIN podcast.roles r ON ur.role_id = r.id
-        WHERE ur.user_id = auth.uid()
-          AND r.name = 'super_admin'
+        FROM podcast.profiles p
+        WHERE p.id = auth.uid()
+          AND p.role = 'super_admin'
     );
 END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION podcast.refresh_popular_tracks()
- RETURNS void
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-BEGIN
-    REFRESH MATERIALIZED VIEW CONCURRENTLY podcast.popular_tracks;
-END;
-$function$
-;
+-- refresh_popular_tracks() removed: it referenced objects this schema never creates
+-- and nothing in the app called it.
+DROP FUNCTION IF EXISTS podcast.refresh_popular_tracks();
 
 CREATE OR REPLACE FUNCTION podcast.update_comment_count()
  RETURNS trigger
@@ -629,6 +744,35 @@ END;
 $function$
 ;
 
+-- Soft-deletes a playlist bypassing table RLS on purpose.
+--
+-- The `playlists_update_own` policy above expresses this exact same
+-- authorization (owner OR admin) and was verified correct character-for-
+-- character, with auth.uid()/is_admin() proven to resolve correctly in the
+-- same transaction as a failing UPDATE against this table — the rejection was
+-- not explainable by the policy text or the session context. This function
+-- performs the identical check itself, then updates as its own owner, who is
+-- exempt from RLS on this table (FORCE ROW LEVEL SECURITY is off). See
+-- migration 033.
+CREATE OR REPLACE FUNCTION podcast.delete_playlist(p_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path = pg_catalog, podcast
+AS $function$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM podcast.playlists
+        WHERE id = p_id AND (user_id = auth.uid() OR podcast.is_admin())
+    ) THEN
+        RAISE EXCEPTION 'Not authorized to delete this playlist' USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE podcast.playlists SET deleted_at = now() WHERE id = p_id;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION podcast.user_has_permission(p_user_id uuid, p_permission text)
  RETURNS boolean
  LANGUAGE plpgsql
@@ -637,6 +781,14 @@ AS $function$
 DECLARE
     v_role TEXT;
 BEGIN
+    -- SECURITY DEFINER bypasses RLS; only the caller's own id (or an admin
+    -- checking someone else's) may be queried here. Today's one call site
+    -- (podcast_audio_admin_upload) always passes auth.uid(), so this only
+    -- closes a latent enumeration path, it doesn't change real behavior.
+    IF p_user_id IS DISTINCT FROM auth.uid() AND NOT podcast.is_admin() THEN
+        RETURN FALSE;
+    END IF;
+
     SELECT role INTO v_role FROM podcast.profiles WHERE id = p_user_id;
     IF v_role IS NULL THEN
         RETURN FALSE;
@@ -737,7 +889,10 @@ DROP POLICY IF EXISTS comments_update_own ON podcast.comments;
 CREATE POLICY comments_update_own ON podcast.comments
     AS PERMISSIVE
     FOR UPDATE TO public
-    USING ((user_id = auth.uid()));
+    USING ((user_id = auth.uid()))
+    WITH CHECK (((user_id = auth.uid()) AND (EXISTS ( SELECT 1
+   FROM podcast.tracks t
+  WHERE ((t.id = comments.track_id) AND (t.status = 'published'::text) AND (t.deleted_at IS NULL))))));
 
 DROP POLICY IF EXISTS favorites_own ON podcast.favorites;
 CREATE POLICY favorites_own ON podcast.favorites
@@ -757,7 +912,12 @@ CREATE POLICY playlist_tracks_manage_own ON podcast.playlist_tracks
     FOR ALL TO public
     USING (((EXISTS ( SELECT 1
    FROM podcast.playlists p
-  WHERE ((p.id = playlist_tracks.playlist_id) AND (p.user_id = auth.uid())))) OR podcast.is_admin()));
+  WHERE ((p.id = playlist_tracks.playlist_id) AND (p.user_id = auth.uid())))) OR podcast.is_admin()))
+    WITH CHECK ((podcast.is_admin() OR ((EXISTS ( SELECT 1
+   FROM podcast.playlists p
+  WHERE ((p.id = playlist_tracks.playlist_id) AND (p.user_id = auth.uid())))) AND (EXISTS ( SELECT 1
+   FROM podcast.tracks t
+  WHERE ((t.id = playlist_tracks.track_id) AND (t.status = 'published'::text) AND (t.deleted_at IS NULL)))))));
 
 DROP POLICY IF EXISTS playlist_tracks_select ON podcast.playlist_tracks;
 CREATE POLICY playlist_tracks_select ON podcast.playlist_tracks
@@ -785,6 +945,10 @@ CREATE POLICY playlists_select ON podcast.playlists
     FOR SELECT TO public
     USING (((deleted_at IS NULL) AND ((user_id = auth.uid()) OR (is_public = true) OR podcast.is_admin())));
 
+-- Deliberately no WITH CHECK: Postgres then reuses USING for the new-row check.
+-- An earlier version of this policy carried `deleted_at IS NULL` in its check,
+-- which made soft-deleting a playlist violate the very policy meant to allow it
+-- ("new row violates row-level security policy"). See migration 031.
 DROP POLICY IF EXISTS playlists_update_own ON podcast.playlists;
 CREATE POLICY playlists_update_own ON podcast.playlists
     AS PERMISSIVE
@@ -852,6 +1016,10 @@ CREATE POLICY tracks_select_published ON podcast.tracks
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA podcast TO anon, authenticated, service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA podcast TO anon, authenticated, service_role;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA podcast TO anon, authenticated, service_role;
+-- Explicit despite the blanket grant above, matching the pattern already used
+-- for search_tracks/keywords_text: an upgraded database should not depend on
+-- a future default surviving unchanged.
+GRANT EXECUTE ON FUNCTION podcast.delete_playlist(uuid) TO authenticated, service_role;
 
 -- Security: a user must never be able to promote themselves.
 -- A column-level REVOKE cannot subtract from a table-level GRANT, so the
@@ -894,11 +1062,20 @@ CREATE POLICY "podcast_audio_admin_upload" ON storage.objects
     FOR INSERT TO authenticated
     WITH CHECK (((bucket_id = 'podcast-audio'::text) AND podcast.user_has_permission(auth.uid(), 'tracks:create'::text)));
 
+-- Playback never reads this bucket directly — every play goes through
+-- /api/stream/[id], which fetches the track via the cookie-scoped client
+-- (RLS: published-only for non-admins) and only then mints a service-role
+-- signed URL (lib/audio-storage.ts). A blanket "any authenticated user" read
+-- policy here bypassed that publish-status gate entirely: any signed-in
+-- visitor could read ANY object in this bucket, including unpublished drafts,
+-- by calling Storage directly instead of the app route. Nothing legitimate
+-- needs this, so it is now admin-only like the sibling delete/upload policies.
 DROP POLICY IF EXISTS "podcast_audio_authenticated_read" ON storage.objects;
-CREATE POLICY "podcast_audio_authenticated_read" ON storage.objects
+DROP POLICY IF EXISTS "podcast_audio_admin_read" ON storage.objects;
+CREATE POLICY "podcast_audio_admin_read" ON storage.objects
     AS PERMISSIVE
     FOR SELECT TO authenticated
-    USING ((bucket_id = 'podcast-audio'::text));
+    USING (((bucket_id = 'podcast-audio'::text) AND podcast.is_admin()));
 
 DROP POLICY IF EXISTS "podcast_avatars_delete_own" ON storage.objects;
 CREATE POLICY "podcast_avatars_delete_own" ON storage.objects
@@ -1006,6 +1183,36 @@ NOTIFY pgrst, 'reload schema';
 -- The single show row. Left blank on purpose: the app falls back to
 -- lib/brand.ts until an admin fills this in at /admin/show, so a fresh install
 -- renders correctly with no manual SQL.
+
+-- -----------------------------------------------------------------------------
+-- 6. Reconcile denormalised playlist counters
+-- -----------------------------------------------------------------------------
+-- playlists.track_count and .total_duration_seconds are maintained by
+-- trg_playlist_stats, but a counter can drift from reality — a track removed
+-- in a way that did not fire the trigger leaves the playlist advertising
+-- sessions it no longer has (the index reads the counter; the detail page
+-- counts real rows, so the two disagree on screen).
+--
+-- Recomputed from playlist_tracks, ignoring soft-deleted tracks, which is the
+-- same definition the detail page uses.
+UPDATE podcast.playlists p
+SET track_count = COALESCE(s.cnt, 0),
+    total_duration_seconds = COALESCE(s.secs, 0)
+FROM (
+    SELECT pl.id,
+           COUNT(t.id)                        AS cnt,
+           COALESCE(SUM(t.duration_seconds), 0) AS secs
+    FROM podcast.playlists pl
+    LEFT JOIN podcast.playlist_tracks pt ON pt.playlist_id = pl.id
+    LEFT JOIN podcast.tracks t
+           ON t.id = pt.track_id
+          AND t.deleted_at IS NULL
+    GROUP BY pl.id
+) s
+WHERE s.id = p.id
+  AND (p.track_count IS DISTINCT FROM COALESCE(s.cnt, 0)
+    OR p.total_duration_seconds IS DISTINCT FROM COALESCE(s.secs, 0));
+
 INSERT INTO podcast.show (id) VALUES (true)
 ON CONFLICT (id) DO NOTHING;
 
@@ -1041,7 +1248,12 @@ INSERT INTO podcast.schema_migrations (version) VALUES
     ('026_guard_role_on_insert'),
     ('027_show_and_platform_links'),
     ('028_playlists_only'),
-    ('029_tracks_admin_write_policies')
+    ('029_tracks_admin_write_policies'),
+    ('030_seo_metadata_and_search'),
+    ('031_playlist_soft_delete_policy'),
+    ('032_verify_playlist_delete_policy'),
+    ('033_playlist_delete_via_rpc'),
+    ('034_security_audit_hardening')
 ON CONFLICT DO NOTHING;
 
 -- =============================================================================
