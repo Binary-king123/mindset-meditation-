@@ -9,8 +9,8 @@
 //
 // Server-only: nodemailer opens TCP sockets, so this must never reach the
 // browser bundle. It is imported exclusively from server actions.
-import nodemailer, { type Transporter } from 'nodemailer';
 import { BRAND } from '@/lib/brand';
+import nodemailer, { type Transporter } from 'nodemailer';
 
 export function smtpConfigured(): boolean {
   return Boolean(
@@ -41,20 +41,45 @@ function isMailbox(value: string): boolean {
   return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address);
 }
 
-let transporter: Transporter | undefined;
+/** The connection settings, read fresh from the environment. */
+function smtpOptions() {
+  const port = Number(process.env.SMTP_PORT ?? 587);
+  return {
+    host: process.env.SMTP_HOST,
+    port,
+    // 465 is implicit TLS; 587 and 25 start plaintext and upgrade via
+    // STARTTLS. Getting this backwards is the usual cause of a connection
+    // that hangs and then times out.
+    secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  };
+}
 
+let transporter: Transporter | undefined;
+let transporterKey: string | undefined;
+
+/**
+ * A transporter for the CURRENT settings, reused while those settings hold.
+ *
+ * The cache is deliberately keyed on the settings themselves rather than being
+ * a plain one-shot singleton. A singleton pins whatever the environment held
+ * the first time a message was sent and never looks again, so rotating the
+ * provider API key — or moving between providers — keeps authenticating with
+ * the dead credential until someone restarts the process. That failure is
+ * awkward to diagnose, because `pnpm smtp:test` builds its own transporter and
+ * therefore reports the new key working perfectly while the running app is
+ * still failing on the old one. Keying on the config makes the swap take
+ * effect on the next send.
+ */
 function transport(): Transporter {
-  if (!transporter) {
-    const port = Number(process.env.SMTP_PORT ?? 587);
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port,
-      // 465 is implicit TLS; 587 and 25 start plaintext and upgrade via
-      // STARTTLS. Getting this backwards is the usual cause of a connection
-      // that hangs and then times out.
-      secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
+  const options = smtpOptions();
+  const key = JSON.stringify(options);
+
+  if (!transporter || transporterKey !== key) {
+    // Let the previous pool's sockets go rather than leaking them on rotation.
+    transporter?.close();
+    transporter = nodemailer.createTransport(options);
+    transporterKey = key;
   }
   return transporter;
 }
@@ -155,7 +180,7 @@ export function passwordResetEmail(link: string): { subject: string; html: strin
       '',
       link,
       '',
-      "If you did not ask for this, you can ignore this email — your password will not change.",
+      'If you did not ask for this, you can ignore this email — your password will not change.',
     ].join('\n'),
     html: `<!doctype html>
 <html><body style="margin:0;padding:0;background:#f5f5fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
