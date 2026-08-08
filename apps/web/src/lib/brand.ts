@@ -8,7 +8,7 @@ export const BRAND = {
   tagline: 'Transform your mind, transform your life',
   description: 'Your space for inner peace, better sleep, and a healthier, happier mind.',
   /** Where footer enquiries are delivered. */
-  contactEmail: 'millionairemindset17@gmail.com',
+  contactEmail: 'themindsetmeditation@gmail.com',
 
   /**
    * Social profiles for the footer icons.

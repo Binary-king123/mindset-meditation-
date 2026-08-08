@@ -3,8 +3,8 @@
 // Footer enquiry form → an email to BRAND.contactEmail, sent over the same SMTP
 // the password-reset flow uses (lib/mailer.ts). Reply-To is set to the sender,
 // so replying from the inbox goes straight back to them.
-import { sendMail, smtpConfigured, explainSmtpError } from '@/lib/mailer';
 import { BRAND } from '@/lib/brand';
+import { explainSmtpError, sendMail, smtpConfigured } from '@/lib/mailer';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -56,7 +56,7 @@ export async function sendEnquiry(input: {
 
   if (!smtpConfigured()) {
     return {
-      error: 'Messaging is not set up on the server yet. Please email us directly for now.',
+      error: `Messaging is not set up on the server yet. Please email us directly at ${BRAND.contactEmail}.`,
     };
   }
 
@@ -77,8 +77,15 @@ export async function sendEnquiry(input: {
       html: `<p><strong>From:</strong> ${safeEmail}</p><p style="white-space:pre-wrap">${safeMessage}</p>`,
     });
   } catch (err) {
-    console.error('[contact] enquiry failed to send:', err);
-    return { error: explainSmtpError(err) };
+    // The provider's own text is the fastest route to the broken setting, so it
+    // goes to the server log in full. It does NOT go to the browser: this form
+    // is public and unauthenticated, and those replies quote real addresses —
+    // Resend's sandbox rejection, for one, names the account owner's personal
+    // inbox. A visitor gets a plain apology and a way through instead.
+    console.error('[contact] enquiry failed to send:', explainSmtpError(err), err);
+    return {
+      error: `Sorry — we could not send that just now. Please email us directly at ${BRAND.contactEmail}.`,
+    };
   }
 
   return { ok: true };
