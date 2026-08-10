@@ -96,8 +96,33 @@ CREATE TABLE IF NOT EXISTS podcast.play_events (
     listened_seconds INTEGER DEFAULT 0 NOT NULL,
     duration_seconds INTEGER DEFAULT 0 NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
+    updated_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    -- Request context, recorded by /api/stream from headers it already holds.
+    -- All NULLable and forward-only: rows written before 035 never had this
+    -- information, so the dashboard reports them as "Unknown" rather than
+    -- dropping them out of percentages and quietly changing the denominator.
+    country TEXT,
+    referrer_host TEXT,
+    device_type TEXT,
+    browser TEXT,
+    os TEXT,
+    language TEXT
 );
+
+-- CREATE TABLE IF NOT EXISTS is a no-op on a database that already has the
+-- table, so the same columns are added again here for the upgrade path.
+ALTER TABLE podcast.play_events
+    ADD COLUMN IF NOT EXISTS country       TEXT,
+    ADD COLUMN IF NOT EXISTS referrer_host TEXT,
+    ADD COLUMN IF NOT EXISTS device_type   TEXT,
+    ADD COLUMN IF NOT EXISTS browser       TEXT,
+    ADD COLUMN IF NOT EXISTS os            TEXT,
+    ADD COLUMN IF NOT EXISTS language      TEXT;
+
+COMMENT ON COLUMN podcast.play_events.country IS
+    'ISO-3166-1 alpha-2 from a CDN geo header. NULL when no CDN is in front of the app.';
+COMMENT ON COLUMN podcast.play_events.referrer_host IS
+    'Hostname only, never the full URL — the path can carry personal data and is not needed to attribute traffic.';
 
 CREATE TABLE IF NOT EXISTS podcast.playlist_tracks (
     id UUID DEFAULT gen_random_uuid() NOT NULL,
@@ -315,6 +340,12 @@ ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_duration_s
 ALTER TABLE podcast.play_events ADD CONSTRAINT play_events_duration_seconds_check CHECK ((duration_seconds >= 0));
 ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_listened_seconds_check;
 ALTER TABLE podcast.play_events ADD CONSTRAINT play_events_listened_seconds_check CHECK ((listened_seconds >= 0));
+-- Free-text from a header is not something to trust into a chart legend
+-- unmoderated. The write path maps user-agents onto a small fixed vocabulary;
+-- this constraint is what makes that mapping load-bearing rather than a
+-- convention someone can forget.
+ALTER TABLE podcast.play_events DROP CONSTRAINT IF EXISTS play_events_device_type_check;
+ALTER TABLE podcast.play_events ADD CONSTRAINT play_events_device_type_check CHECK ((device_type IS NULL OR device_type = ANY (ARRAY['mobile'::text, 'tablet'::text, 'desktop'::text, 'tv'::text, 'bot'::text, 'other'::text])));
 ALTER TABLE podcast.playlists DROP CONSTRAINT IF EXISTS playlists_description_check;
 ALTER TABLE podcast.playlists ADD CONSTRAINT playlists_description_check CHECK ((length(description) <= 1000));
 ALTER TABLE podcast.playlists DROP CONSTRAINT IF EXISTS playlists_title_check;
@@ -367,6 +398,9 @@ CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON podcast.favorites USING btre
 CREATE INDEX IF NOT EXISTS play_events_created_idx ON podcast.play_events USING btree (created_at DESC);
 CREATE INDEX IF NOT EXISTS play_events_listener_idx ON podcast.play_events USING btree (created_at DESC, user_id, session_id);
 CREATE INDEX IF NOT EXISTS play_events_track_created_idx ON podcast.play_events USING btree (track_id, created_at DESC);
+-- Reach breakdowns all filter by created_at and group by one dimension.
+CREATE INDEX IF NOT EXISTS play_events_country_idx ON podcast.play_events USING btree (created_at DESC, country);
+CREATE INDEX IF NOT EXISTS play_events_referrer_idx ON podcast.play_events USING btree (created_at DESC, referrer_host);
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_id ON podcast.playlist_tracks USING btree (playlist_id);
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position ON podcast.playlist_tracks USING btree (playlist_id, "position");
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track_id ON podcast.playlist_tracks USING btree (track_id);
@@ -488,6 +522,307 @@ BEGIN
            ON pe.created_at >= d AND pe.created_at < d + INTERVAL '1 day'
     GROUP BY d
     ORDER BY d;
+END;
+$function$
+;
+
+-- -----------------------------------------------------------------------------
+-- Admin dashboard aggregates (035)
+-- -----------------------------------------------------------------------------
+-- get_play_analytics/get_play_timeseries above answer "how many plays" and
+-- nothing else. These four answer the rest of the questions the admin
+-- dashboard asks, and they aggregate in the database: the page used to fetch up
+-- to 10,000 play_events rows and reduce them in JS for per-episode retention,
+-- which silently goes wrong the moment a window exceeds that cap.
+
+-- Current-window figures alongside the immediately preceding window of the same
+-- length, so the UI can show direction of travel without a second round trip
+-- and without inventing a baseline.
+CREATE OR REPLACE FUNCTION podcast.get_admin_dashboard(p_days integer DEFAULT 30)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path = podcast, public
+AS $function$
+DECLARE
+    v_days     INTEGER := GREATEST(COALESCE(p_days, 30), 1);
+    v_start    TIMESTAMPTZ := NOW() - (v_days || ' days')::INTERVAL;
+    v_prev     TIMESTAMPTZ := NOW() - (v_days * 2 || ' days')::INTERVAL;
+    v_result   JSONB;
+BEGIN
+    IF NOT podcast.is_admin() THEN
+        RAISE EXCEPTION 'Forbidden';
+    END IF;
+
+    WITH win AS (
+        SELECT * FROM podcast.play_events WHERE created_at >= v_start
+    ),
+    prev AS (
+        SELECT * FROM podcast.play_events
+        WHERE created_at >= v_prev AND created_at < v_start
+    ),
+    -- A "listener" is a signed-in user if we know one, otherwise the browser
+    -- session. Mixing the two in a single COALESCE is what makes the count
+    -- stable when someone signs in halfway through their listening history.
+    sessions AS (
+        SELECT COALESCE(user_id::TEXT, session_id) AS listener,
+               COUNT(*) AS plays
+        FROM win GROUP BY 1
+    ),
+    -- First time we ever saw this listener, so "new" means new to the product,
+    -- not merely new to the window.
+    first_seen AS (
+        SELECT COALESCE(user_id::TEXT, session_id) AS listener,
+               MIN(created_at) AS first_at
+        FROM podcast.play_events GROUP BY 1
+    )
+    SELECT JSONB_BUILD_OBJECT(
+        'days', v_days,
+        'plays',            (SELECT COUNT(*) FROM win),
+        'plays_prev',       (SELECT COUNT(*) FROM prev),
+        'plays_total',      (SELECT COUNT(*) FROM podcast.play_events),
+        'plays_today',      (SELECT COUNT(*) FROM podcast.play_events
+                             WHERE created_at >= DATE_TRUNC('day', NOW())),
+        'plays_yesterday',  (SELECT COUNT(*) FROM podcast.play_events
+                             WHERE created_at >= DATE_TRUNC('day', NOW()) - INTERVAL '1 day'
+                               AND created_at <  DATE_TRUNC('day', NOW())),
+        'listeners',        (SELECT COUNT(*) FROM sessions),
+        'listeners_prev',   (SELECT COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) FROM prev),
+        'listeners_total',  (SELECT COUNT(DISTINCT COALESCE(user_id::TEXT, session_id))
+                             FROM podcast.play_events),
+        'listeners_new',    (SELECT COUNT(*) FROM first_seen WHERE first_at >= v_start),
+        'listeners_repeat', (SELECT COUNT(*) FROM sessions WHERE plays > 1),
+        -- signed_in_plays counts events, not people — one account listening ten
+        -- times is ten signed-in plays.
+        'signed_in_plays',  (SELECT COUNT(*) FROM win WHERE user_id IS NOT NULL),
+        'anon_plays',       (SELECT COUNT(*) FROM win WHERE user_id IS NULL),
+        -- The honest "how much" figure: summed heard-seconds, not plays ×
+        -- episode length.
+        'listened_seconds',      (SELECT COALESCE(SUM(listened_seconds), 0) FROM win),
+        'listened_seconds_prev', (SELECT COALESCE(SUM(listened_seconds), 0) FROM prev),
+        'listened_seconds_total',(SELECT COALESCE(SUM(listened_seconds), 0) FROM podcast.play_events),
+        'avg_listen_seconds',    (SELECT COALESCE(ROUND(AVG(listened_seconds)), 0) FROM win),
+        'retention',  (SELECT COALESCE(ROUND(AVG(
+                          LEAST(listened_seconds::NUMERIC / NULLIF(duration_seconds, 0), 1)
+                      ) FILTER (WHERE duration_seconds > 0) * 100, 1), 0) FROM win),
+        'completion', (SELECT COALESCE(ROUND(
+                          COUNT(*) FILTER (WHERE duration_seconds > 0
+                                             AND listened_seconds::NUMERIC / duration_seconds >= 0.9
+                          )::NUMERIC * 100
+                          / NULLIF(COUNT(*) FILTER (WHERE duration_seconds > 0), 0), 1), 0) FROM win),
+        'saves',          (SELECT COUNT(*) FROM podcast.favorites WHERE created_at >= v_start),
+        'saves_prev',     (SELECT COUNT(*) FROM podcast.favorites
+                           WHERE created_at >= v_prev AND created_at < v_start),
+        'saves_total',    (SELECT COUNT(*) FROM podcast.favorites),
+        'comments',       (SELECT COUNT(*) FROM podcast.comments WHERE created_at >= v_start),
+        'comments_prev',  (SELECT COUNT(*) FROM podcast.comments
+                           WHERE created_at >= v_prev AND created_at < v_start),
+        'comments_total', (SELECT COUNT(*) FROM podcast.comments),
+        -- Deliberately NOT called followers: this product has no follow
+        -- relationship, and labelling registrations as followers is the kind of
+        -- flattering mislabel this dashboard is meant to stop doing.
+        'accounts',       (SELECT COUNT(*) FROM podcast.profiles WHERE created_at >= v_start),
+        'accounts_prev',  (SELECT COUNT(*) FROM podcast.profiles
+                           WHERE created_at >= v_prev AND created_at < v_start),
+        'accounts_total', (SELECT COUNT(*) FROM podcast.profiles),
+        'tracks_published', (SELECT COUNT(*) FROM podcast.tracks
+                             WHERE status = 'published' AND deleted_at IS NULL),
+        'tracks_draft',     (SELECT COUNT(*) FROM podcast.tracks
+                             WHERE status = 'draft' AND deleted_at IS NULL),
+        'catalog_seconds',  (SELECT COALESCE(SUM(duration_seconds), 0) FROM podcast.tracks
+                             WHERE deleted_at IS NULL),
+        -- True when no row in the window carries geo data, which is the normal
+        -- state without a CDN. Lets the UI say so instead of drawing a blank.
+        'has_geo', (SELECT EXISTS (SELECT 1 FROM win WHERE country IS NOT NULL))
+    ) INTO v_result;
+
+    RETURN COALESCE(v_result, '{}'::JSONB);
+END;
+$function$
+;
+
+-- GENERATE_SERIES on the left of every join so quiet days appear as zeros. A
+-- chart that silently omits empty days misrepresents a gap as a plateau.
+CREATE OR REPLACE FUNCTION podcast.get_admin_timeseries(p_days integer DEFAULT 30)
+ RETURNS TABLE(
+     day date,
+     plays bigint,
+     listeners bigint,
+     listened_seconds bigint,
+     saves bigint,
+     comments bigint,
+     signups bigint
+ )
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path = podcast, public
+AS $function$
+DECLARE
+    v_days INTEGER := GREATEST(COALESCE(p_days, 30), 1);
+BEGIN
+    IF NOT podcast.is_admin() THEN
+        RAISE EXCEPTION 'Forbidden';
+    END IF;
+
+    RETURN QUERY
+    WITH d AS (
+        SELECT generate_series(
+            DATE_TRUNC('day', NOW()) - ((v_days - 1) || ' days')::INTERVAL,
+            DATE_TRUNC('day', NOW()),
+            '1 day'
+        ) AS bucket
+    )
+    SELECT d.bucket::DATE,
+           (SELECT COUNT(*) FROM podcast.play_events pe
+             WHERE pe.created_at >= d.bucket AND pe.created_at < d.bucket + INTERVAL '1 day'),
+           (SELECT COUNT(DISTINCT COALESCE(pe.user_id::TEXT, pe.session_id)) FROM podcast.play_events pe
+             WHERE pe.created_at >= d.bucket AND pe.created_at < d.bucket + INTERVAL '1 day'),
+           (SELECT COALESCE(SUM(pe.listened_seconds), 0)::BIGINT FROM podcast.play_events pe
+             WHERE pe.created_at >= d.bucket AND pe.created_at < d.bucket + INTERVAL '1 day'),
+           (SELECT COUNT(*) FROM podcast.favorites f
+             WHERE f.created_at >= d.bucket AND f.created_at < d.bucket + INTERVAL '1 day'),
+           (SELECT COUNT(*) FROM podcast.comments c
+             WHERE c.created_at >= d.bucket AND c.created_at < d.bucket + INTERVAL '1 day'),
+           (SELECT COUNT(*) FROM podcast.profiles p
+             WHERE p.created_at >= d.bucket AND p.created_at < d.bucket + INTERVAL '1 day')
+    FROM d
+    ORDER BY d.bucket;
+END;
+$function$
+;
+
+-- Per-episode, aggregated in the database. Saves and comments come from their
+-- own tables rather than the denormalised counters on tracks, because those
+-- counters are all-time and this is windowed.
+CREATE OR REPLACE FUNCTION podcast.get_admin_track_stats(p_days integer DEFAULT 30)
+ RETURNS TABLE(
+     track_id uuid,
+     title text,
+     slug text,
+     status text,
+     published_at timestamptz,
+     duration_seconds integer,
+     plays bigint,
+     listeners bigint,
+     listened_seconds bigint,
+     retention numeric,
+     completions bigint,
+     saves bigint,
+     comments bigint,
+     last_played_at timestamptz
+ )
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path = podcast, public
+AS $function$
+DECLARE
+    v_days  INTEGER := GREATEST(COALESCE(p_days, 30), 1);
+    v_start TIMESTAMPTZ := NOW() - (v_days || ' days')::INTERVAL;
+BEGIN
+    IF NOT podcast.is_admin() THEN
+        RAISE EXCEPTION 'Forbidden';
+    END IF;
+
+    RETURN QUERY
+    SELECT t.id,
+           t.title,
+           t.slug,
+           t.status,
+           t.published_at,
+           t.duration_seconds,
+           COALESCE(p.plays, 0),
+           COALESCE(p.listeners, 0),
+           COALESCE(p.listened_seconds, 0),
+           COALESCE(p.retention, 0),
+           COALESCE(p.completions, 0),
+           COALESCE(s.saves, 0),
+           COALESCE(c.comments, 0),
+           p.last_played_at
+    FROM podcast.tracks t
+    LEFT JOIN (
+        SELECT pe.track_id,
+               COUNT(*)                                                   AS plays,
+               COUNT(DISTINCT COALESCE(pe.user_id::TEXT, pe.session_id))   AS listeners,
+               COALESCE(SUM(pe.listened_seconds), 0)::BIGINT               AS listened_seconds,
+               COALESCE(ROUND(AVG(
+                   LEAST(pe.listened_seconds::NUMERIC / NULLIF(pe.duration_seconds, 0), 1)
+               ) FILTER (WHERE pe.duration_seconds > 0) * 100, 1), 0)      AS retention,
+               COUNT(*) FILTER (WHERE pe.duration_seconds > 0
+                                  AND pe.listened_seconds::NUMERIC / pe.duration_seconds >= 0.9) AS completions,
+               MAX(pe.created_at)                                          AS last_played_at
+        FROM podcast.play_events pe
+        WHERE pe.created_at >= v_start
+        GROUP BY pe.track_id
+    ) p ON p.track_id = t.id
+    LEFT JOIN (
+        SELECT f.track_id, COUNT(*) AS saves
+        FROM podcast.favorites f WHERE f.created_at >= v_start GROUP BY f.track_id
+    ) s ON s.track_id = t.id
+    LEFT JOIN (
+        SELECT cm.track_id, COUNT(*) AS comments
+        FROM podcast.comments cm WHERE cm.created_at >= v_start GROUP BY cm.track_id
+    ) c ON c.track_id = t.id
+    WHERE t.deleted_at IS NULL
+    ORDER BY COALESCE(p.plays, 0) DESC, t.title ASC;
+END;
+$function$
+;
+
+-- Where listeners come from. Each dimension is capped at its top 8 values so
+-- one long tail cannot make the payload unbounded. NULLs are surfaced as
+-- 'Unknown' rather than filtered out, so segments always sum to the play total
+-- and nothing is quietly hidden.
+CREATE OR REPLACE FUNCTION podcast.get_admin_reach(p_days integer DEFAULT 30)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path = podcast, public
+AS $function$
+DECLARE
+    v_days   INTEGER := GREATEST(COALESCE(p_days, 30), 1);
+    v_start  TIMESTAMPTZ := NOW() - (v_days || ' days')::INTERVAL;
+    v_result JSONB;
+BEGIN
+    IF NOT podcast.is_admin() THEN
+        RAISE EXCEPTION 'Forbidden';
+    END IF;
+
+    WITH win AS (
+        SELECT * FROM podcast.play_events WHERE created_at >= v_start
+    ),
+    dim AS (
+        SELECT 'device'   AS d, COALESCE(device_type, 'Unknown')   AS k, COUNT(*) AS plays,
+               COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) AS listeners FROM win GROUP BY 2
+        UNION ALL
+        SELECT 'browser', COALESCE(browser, 'Unknown'), COUNT(*),
+               COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) FROM win GROUP BY 2
+        UNION ALL
+        SELECT 'os', COALESCE(os, 'Unknown'), COUNT(*),
+               COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) FROM win GROUP BY 2
+        UNION ALL
+        SELECT 'country', COALESCE(country, 'Unknown'), COUNT(*),
+               COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) FROM win GROUP BY 2
+        UNION ALL
+        SELECT 'referrer', COALESCE(referrer_host, 'Direct'), COUNT(*),
+               COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) FROM win GROUP BY 2
+        UNION ALL
+        SELECT 'language', COALESCE(language, 'Unknown'), COUNT(*),
+               COUNT(DISTINCT COALESCE(user_id::TEXT, session_id)) FROM win GROUP BY 2
+    ),
+    ranked AS (
+        SELECT d, k, plays, listeners,
+               ROW_NUMBER() OVER (PARTITION BY d ORDER BY plays DESC, k ASC) AS rn
+        FROM dim
+    )
+    SELECT JSONB_OBJECT_AGG(d, entries) INTO v_result
+    FROM (
+        SELECT d, JSONB_AGG(JSONB_BUILD_OBJECT(
+                     'key', k, 'plays', plays, 'listeners', listeners
+                 ) ORDER BY plays DESC, k ASC) AS entries
+        FROM ranked WHERE rn <= 8 GROUP BY d
+    ) grouped;
+
+    RETURN COALESCE(v_result, '{}'::JSONB);
 END;
 $function$
 ;
@@ -1020,6 +1355,14 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA podcast TO anon, authenticated, service
 -- for search_tracks/keywords_text: an upgraded database should not depend on
 -- a future default surviving unchanged.
 GRANT EXECUTE ON FUNCTION podcast.delete_playlist(uuid) TO authenticated, service_role;
+-- The blanket GRANT above only covers functions that existed when it ran, so
+-- anything added later needs saying explicitly. These four gate on is_admin()
+-- internally, so authenticated is the correct grantee — anon has no reason to
+-- hold EXECUTE on them at all.
+GRANT EXECUTE ON FUNCTION podcast.get_admin_dashboard(integer)   TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION podcast.get_admin_timeseries(integer)  TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION podcast.get_admin_track_stats(integer) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION podcast.get_admin_reach(integer)       TO authenticated, service_role;
 
 -- Security: a user must never be able to promote themselves.
 -- A column-level REVOKE cannot subtract from a table-level GRANT, so the
@@ -1253,7 +1596,8 @@ INSERT INTO podcast.schema_migrations (version) VALUES
     ('031_playlist_soft_delete_policy'),
     ('032_verify_playlist_delete_policy'),
     ('033_playlist_delete_via_rpc'),
-    ('034_security_audit_hardening')
+    ('034_security_audit_hardening'),
+    ('035_analytics_reach_and_dashboard')
 ON CONFLICT DO NOTHING;
 
 -- =============================================================================

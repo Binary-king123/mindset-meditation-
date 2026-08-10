@@ -6,6 +6,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { signAudioUrl } from '@/lib/audio-storage';
+import { requestContext } from '@/lib/request-context';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -37,17 +38,39 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const sessionId = req.nextUrl.searchParams.get('sid');
   if (sessionId) {
     const admin = createAdminClient();
-    const { data: event } = await admin
+    // Device/referrer/language, and country when a CDN supplies it. Recorded
+    // here rather than sent from the client because a browser cannot be trusted
+    // to report its own referrer, and because this route already holds the
+    // headers — see lib/request-context.ts for what is deliberately not kept.
+    const context = requestContext(req.headers, req.nextUrl.hostname);
+    const base = {
+      track_id: id,
+      user_id: user?.id ?? null,
+      session_id: sessionId,
+      duration_seconds: track.duration_seconds ?? 0,
+    };
+
+    const { data: event, error } = await admin
       .from('play_events')
-      .insert({
-        track_id: id,
-        user_id: user?.id ?? null,
-        session_id: sessionId,
-        duration_seconds: track.duration_seconds ?? 0,
-      })
+      .insert({ ...base, ...context })
       .select('id')
       .single();
-    eventId = event?.id ?? null;
+
+    if (error) {
+      // The context columns arrive with migration 035. If the code is deployed
+      // before that runs, PostgREST rejects the whole insert for unknown
+      // columns and the play would go unrecorded — analytics would quietly flatline
+      // rather than fail loudly. Retrying without them keeps play tracking
+      // working on the old schema, so deploy order stops mattering.
+      const { data: fallback } = await admin
+        .from('play_events')
+        .insert(base)
+        .select('id')
+        .single();
+      eventId = fallback?.id ?? null;
+    } else {
+      eventId = event?.id ?? null;
+    }
   }
 
   // Best-effort play-count bump.
