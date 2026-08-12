@@ -20,8 +20,8 @@ export const BRAND = {
    * useful: fill in the real profile URL to bring it back.
    */
   social: {
-    instagram: '',
-    youtube: '',
-    x: '',
+    instagram: 'https://www.instagram.com/themindsetmeditationpodcast/',
+    youtube: 'https://www.youtube.com/@themindsetmeditation8824',
+    x: 'https://open.spotify.com/show/6Gn5FiuA8zZhLHjRbrgEY2',
   },
 } as const;
