@@ -65,8 +65,15 @@ export async function POST(req: NextRequest) {
       }
       // No parts manifest from the client: completeMultipart asks R2 which
       // parts it is holding, which works whether or not the bucket exposes the
-      // ETag header to the browser.
-      await completeMultipart(key, uploadId);
+      // ETag header to the browser. The client sends only the expected *count*,
+      // which is checked against R2's own list so a short upload fails here
+      // rather than publishing a truncated episode.
+      const expected = Number(body.expectedParts);
+      await completeMultipart(
+        key,
+        uploadId,
+        Number.isInteger(expected) && expected > 0 ? expected : undefined,
+      );
       return NextResponse.json({ ok: true, audioPath: encodeAudioPath('r2', key) });
     } catch (err) {
       return fail(err instanceof Error ? err.message : 'Could not finalise the upload');

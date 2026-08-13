@@ -2,7 +2,7 @@
 // present; otherwise we fall back to the private `podcast-audio` Supabase
 // Storage bucket, which needs no extra setup. Either way the browser uploads
 // directly and playback goes through a short-lived signed URL.
-import { presignGetUrl, r2Configured } from '@/lib/r2';
+import { deleteObject, presignGetUrl, r2Configured } from '@/lib/r2';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export type AudioBackend = 'r2' | 'supabase';
@@ -41,6 +41,32 @@ export async function signAudioUrl(path: string, expiresIn = 3600): Promise<stri
   const { data, error } = await admin.storage.from(AUDIO_BUCKET).createSignedUrl(key, expiresIn);
   if (error) return null;
   return data?.signedUrl ?? null;
+}
+
+/**
+ * Deletes the stored audio, from whichever backend holds it.
+ *
+ * Returns an error message instead of throwing: by the time this runs the DB
+ * row is already gone, and the admin should not see a red toast on a delete
+ * that did in fact happen. The caller surfaces it as a warning so a file left
+ * behind is still visible rather than silent.
+ */
+export async function deleteAudio(path: string): Promise<string | null> {
+  const { backend, key } = parseAudioPath(path);
+
+  try {
+    if (backend === 'r2') {
+      if (!r2Configured()) return 'R2 is not configured — its audio file was left in place';
+      await deleteObject(key);
+      return null;
+    }
+
+    const admin = createAdminClient();
+    const { error } = await admin.storage.from(AUDIO_BUCKET).remove([key]);
+    return error ? error.message : null;
+  } catch (err) {
+    return err instanceof Error ? err.message : 'Could not delete the audio file';
+  }
 }
 
 async function presignPutSafe(fn: () => Promise<string>): Promise<string | null> {

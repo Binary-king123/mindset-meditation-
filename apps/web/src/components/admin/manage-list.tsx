@@ -47,6 +47,10 @@ export function ManageList({ rows }: { rows: ManageRow[] }) {
         toast.error(r.error);
         return;
       }
+      // The episode is gone either way; a warning means a stored file survived
+      // it, which is worth saying rather than swallowing.
+      if ('warning' in r && r.warning) toast.warning(r.warning);
+      else toast.success(`"${row.title}" deleted`);
       setItems((prev) => prev.filter((i) => i.id !== row.id));
     });
   }

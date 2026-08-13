@@ -5,6 +5,7 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   ListPartsCommand,
   PutObjectCommand,
@@ -32,6 +33,13 @@ function r2(): S3Client {
         accessKeyId: process.env.R2_ACCESS_KEY_ID as string,
         secretAccessKey: process.env.R2_SECRET_ACCESS_KEY as string,
       },
+      // From v3.729 the SDK checksums every request body by default, and for a
+      // *presigned* URL it does that at signing time — when the body is empty.
+      // The URL then carries `x-amz-checksum-crc32=AAAAAA==` (CRC32 of nothing)
+      // inside the signature, so R2 rejects the real bytes the browser sends.
+      // WHEN_REQUIRED keeps checksums only where the API demands them.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
     });
   }
   return client;
@@ -45,6 +53,14 @@ export function presignPutUrl(key: string, contentType: string, expiresIn = 600)
     new PutObjectCommand({ Bucket: bucket(), Key: key, ContentType: contentType }),
     { expiresIn },
   );
+}
+
+/**
+ * Removes an object. S3 delete is idempotent — deleting a key that is not there
+ * succeeds — so this is safe to call on an episode whose file was already gone.
+ */
+export async function deleteObject(key: string): Promise<void> {
+  await r2().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
 }
 
 export function presignGetUrl(key: string, expiresIn = 3600): Promise<string> {
@@ -143,10 +159,30 @@ async function listUploadedParts(
   return parts.sort((a, b) => a.PartNumber - b.PartNumber);
 }
 
-export async function completeMultipart(key: string, uploadId: string): Promise<void> {
+export async function completeMultipart(
+  key: string,
+  uploadId: string,
+  expectedParts?: number,
+): Promise<void> {
   const parts = await listUploadedParts(key, uploadId);
   if (parts.length === 0) {
     throw new Error('R2 is holding no parts for this upload — nothing to complete');
+  }
+
+  // S3 will happily assemble whatever parts it has, so a missing part yields a
+  // valid object holding a truncated file. Nothing downstream can detect that —
+  // the episode simply cuts off mid-sentence on playback. Checking the count
+  // and the numbering turns that into a failed upload the admin can retry.
+  if (expectedParts !== undefined && parts.length !== expectedParts) {
+    throw new Error(
+      `Upload incomplete — R2 has ${parts.length} of ${expectedParts} parts. Nothing was saved; please try again.`,
+    );
+  }
+  const gap = parts.findIndex((part, i) => part.PartNumber !== i + 1);
+  if (gap !== -1) {
+    throw new Error(
+      `Upload incomplete — part ${gap + 1} is missing. Nothing was saved; please try again.`,
+    );
   }
 
   await r2().send(

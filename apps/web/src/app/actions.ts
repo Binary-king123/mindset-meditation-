@@ -1,7 +1,8 @@
 'use server';
 
+import { deleteAudio } from '@/lib/audio-storage';
 import { PLATFORMS, type PlatformLinks, sanitizePlatformUrl } from '@/lib/platforms';
-import { slugify, uniqueSlug } from '@/lib/podcast';
+import { BUCKETS, slugify, uniqueSlug } from '@/lib/podcast';
 import { generateEpisodeMetadata } from '@/lib/seo/generate';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -225,6 +226,47 @@ function schemaHint(message: string): string {
 function revalidateDiscovery() {
   revalidatePath('/sitemap.xml');
   revalidatePath('/feed.xml');
+}
+
+/**
+ * Every cached surface an episode appears on.
+ *
+ * `/` and `/episodes` are both prerendered with `revalidate = 300`, so anything
+ * missed here keeps serving the old catalogue for five minutes. `/episodes` was
+ * the gap: creating, deleting or unpublishing an episode revalidated the
+ * homepage but never the "View all" page behind it, so a deleted episode was
+ * still listed there — the delete looked broken when it had actually worked.
+ */
+function revalidateEpisode(slug?: string | null, playlistSlugs: string[] = []) {
+  revalidatePath('/');
+  revalidatePath('/episodes');
+  revalidatePath('/admin/playlists');
+  if (slug) revalidatePath(`/podcast/${slug}`);
+  for (const playlistSlug of new Set(playlistSlugs)) {
+    revalidatePath(`/playlist/${playlistSlug}`);
+  }
+  revalidateDiscovery();
+}
+
+/**
+ * Slugs of the playlists an episode appears on, so their pages can be purged.
+ * Must be read before a delete — the join rows cascade away with the track.
+ */
+async function playlistSlugsForTrack(supabase: PodcastClient, id: string): Promise<string[]> {
+  const { data } = await supabase
+    .from('playlist_tracks')
+    .select('playlists(slug)')
+    .eq('track_id', id);
+
+  // PostgREST returns a single object for a many-to-one embed, but the
+  // generated types model every embed as an array. Accept both rather than
+  // asserting one and breaking whenever the types are regenerated.
+  type Embedded = { playlists: { slug: string | null } | Array<{ slug: string | null }> | null };
+
+  return ((data ?? []) as unknown as Embedded[])
+    .flatMap((row) => (Array.isArray(row.playlists) ? row.playlists : [row.playlists]))
+    .map((playlist) => playlist?.slug)
+    .filter((slug): slug is string => Boolean(slug));
 }
 
 /** Playlists are how listeners browse, so every change touches these three. */
@@ -475,8 +517,7 @@ export async function adminCreatePodcast(input: CreatePodcastInput) {
     });
     // The episode itself saved fine — report the link failure without losing it.
     if (linkError) {
-      revalidatePath('/');
-      revalidateDiscovery();
+      revalidateEpisode(data.slug);
       return {
         podcast: data,
         warning: `Saved, but could not add to playlist: ${linkError.message}`,
@@ -485,9 +526,7 @@ export async function adminCreatePodcast(input: CreatePodcastInput) {
     revalidatePath('/playlists');
   }
 
-  revalidatePath('/');
-  revalidatePath('/admin/playlists');
-  revalidateDiscovery();
+  revalidateEpisode(data.slug);
   return { podcast: data };
 }
 
@@ -639,11 +678,8 @@ export async function adminUpdatePodcast(input: UpdatePodcastInput) {
     }
   }
 
-  revalidatePath('/');
   revalidatePath('/playlists');
-  revalidatePath('/admin/playlists');
-  revalidatePath(`/podcast/${data.slug}`);
-  revalidateDiscovery();
+  revalidateEpisode(data.slug);
   return { podcast: data };
 }
 
@@ -652,41 +688,96 @@ export async function adminSetStatus(id: string, status: 'draft' | 'published' |
   if (gate.error) return { error: gate.error };
   const supabase = await createClient();
 
+  // The slug comes back on the same read as published_at — un-publishing has to
+  // purge the episode's own page and /episodes, not just the homepage, or an
+  // archived episode stays reachable and listed for its full cache window.
+  const { data: current } = await supabase
+    .from('tracks')
+    .select('slug, published_at')
+    .eq('id', id)
+    .maybeSingle();
+  const existing = current as { slug: string | null; published_at: string | null } | null;
+
   // published_at is stamped once, the first time an episode goes public, and
   // never moved after that — un-publishing and re-publishing must not restate
   // the episode as brand new in the RSS feed.
   // biome-ignore lint/suspicious/noExplicitAny: partial update over an untyped row
   const patch: Record<string, any> = { status };
-  if (status === 'published') {
-    const { data } = await supabase
-      .from('tracks')
-      .select('published_at')
-      .eq('id', id)
-      .maybeSingle();
-    if (!(data as { published_at: string | null } | null)?.published_at) {
-      patch.published_at = new Date().toISOString();
-    }
+  if (status === 'published' && !existing?.published_at) {
+    patch.published_at = new Date().toISOString();
   }
+
+  const playlistSlugs = await playlistSlugsForTrack(supabase, id);
 
   const { error } = await supabase.from('tracks').update(patch).eq('id', id);
   if (error) return { error: error.message };
-  revalidatePath('/');
-  revalidatePath('/admin/playlists');
-  revalidateDiscovery();
+  revalidateEpisode(existing?.slug, playlistSlugs);
   return { ok: true };
 }
 
+/**
+ * Deletes an episode for real: the row, everything that cascades from it, and
+ * both stored files.
+ *
+ * This used to only stamp `deleted_at`. That hid the episode but left the audio
+ * object in R2 and the cover in Supabase Storage billed forever, and — because
+ * `/episodes` and the episode's own page were never revalidated — a deleted
+ * episode kept being served from the static cache for up to its five-minute
+ * window, which is what made a delete look like it had not worked.
+ *
+ * Order matters: the row goes first. Deleting the files first would leave a
+ * live episode pointing at missing audio if the DB delete then failed, and a
+ * 404 for listeners is worse than an orphaned object for the admin.
+ * `play_events` survives via ON DELETE SET NULL (migration 036), so all-time
+ * analytics totals do not move.
+ */
 export async function adminDeletePodcast(id: string) {
   const gate = await requireAdmin();
   if (gate.error) return { error: gate.error };
   const supabase = await createClient();
-  const { error } = await supabase
+
+  // Read the paths BEFORE the delete — afterwards the row is gone and with it
+  // any way to find the files it owned.
+  const { data: existing } = await supabase
     .from('tracks')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('id', id);
+    .select('slug, audio_path, thumbnail_path')
+    .eq('id', id)
+    .maybeSingle();
+
+  const track = existing as {
+    slug: string | null;
+    audio_path: string | null;
+    thumbnail_path: string | null;
+  } | null;
+
+  // Which playlist pages showed this episode. Read before the delete too: the
+  // join rows cascade away with the track.
+  const playlistSlugs = await playlistSlugsForTrack(supabase, id);
+
+  const { error } = await supabase.from('tracks').delete().eq('id', id);
   if (error) return { error: error.message };
-  revalidatePath('/');
-  revalidatePath('/admin/playlists');
-  revalidateDiscovery();
-  return { ok: true };
+
+  // Files second, and never fatal: the episode is already gone from the site,
+  // so failing here would report a delete that plainly did happen as an error.
+  // A leftover file is reported as a warning instead of vanishing silently.
+  const leftovers: string[] = [];
+
+  if (track?.audio_path) {
+    const failed = await deleteAudio(track.audio_path);
+    if (failed) leftovers.push(`audio (${failed})`);
+  }
+
+  if (track?.thumbnail_path) {
+    const admin = createAdminClient();
+    const { error: coverError } = await admin.storage
+      .from(BUCKETS.thumbnails)
+      .remove([track.thumbnail_path]);
+    if (coverError) leftovers.push(`cover image (${coverError.message})`);
+  }
+
+  revalidateEpisode(track?.slug, playlistSlugs);
+
+  return leftovers.length > 0
+    ? { ok: true, warning: `Episode deleted, but could not remove its ${leftovers.join(' and ')}.` }
+    : { ok: true };
 }

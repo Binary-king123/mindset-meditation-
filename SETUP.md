@@ -42,8 +42,8 @@ on 6543 rejects DDL.
 3. Bucket → **Settings → CORS Policy → Add**:
    ```json
    [{
-     "AllowedOrigins": ["http://localhost:3100", "https://your-domain.com"],
-     "AllowedMethods": ["PUT", "GET"],
+     "AllowedOrigins": ["http://localhost:3100", "https://themindsetmeditation.com", "https://www.themindsetmeditation.com"],
+     "AllowedMethods": ["PUT", "GET", "HEAD"],
      "AllowedHeaders": ["*"],
      "MaxAgeSeconds": 3600
    }]

@@ -84,15 +84,24 @@ them. Bucket → **Settings** → **CORS policy** → add:
 ```json
 [
   {
-    "AllowedOrigins": ["https://yourdomain.com", "http://localhost:3100"],
-    "AllowedMethods": ["PUT", "GET"],
+    "AllowedOrigins": [
+      "https://themindsetmeditation.com",
+      "https://www.themindsetmeditation.com",
+      "http://localhost:3100"
+    ],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
     "AllowedHeaders": ["content-type"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
 
-Without this, uploads fail with a network error in the browser console.
+List **every** origin the admin page is served from, scheme included and no
+trailing slash — R2 matches the browser's `Origin` header exactly, so a policy
+naming the apex domain does nothing for `www.`. Without a match the browser
+reports *"Network error during upload — check the storage bucket CORS
+settings"*, and the console shows the preflight failing with *No
+'Access-Control-Allow-Origin' header is present*.
 
 **5. Fill in `.env` and restart**
 

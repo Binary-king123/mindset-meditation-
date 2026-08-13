@@ -181,7 +181,13 @@ async function uploadParts(
           // transferred. The server asks R2 for the manifest instead.
           loaded[index] = chunk.size;
           report();
-          return;
+          // `break`, not `return` — this exits the retry loop to take the next
+          // part off the queue. Returning here ended the whole worker after a
+          // single part, so with PART_CONCURRENCY workers only the first
+          // PART_CONCURRENCY parts were ever sent: anything above ~40 MB
+          // completed from a partial manifest and published as a truncated
+          // episode, with a full green progress bar and no error anywhere.
+          break;
         } catch (err) {
           if (attempt >= PART_RETRIES) throw err;
           loaded[index] = 0;
@@ -264,6 +270,10 @@ export async function uploadAudio(
           action: 'complete',
           key: presign.key,
           uploadId: presign.uploadId,
+          // How many parts R2 must be holding. The server refuses to assemble a
+          // short manifest, so a dropped part fails the upload instead of
+          // publishing a truncated file.
+          expectedParts: presign.partUrls.length,
         }),
       });
       const result = await done.json();
